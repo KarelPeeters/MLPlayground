@@ -115,7 +115,10 @@ def set_optim_lr(optim, lr):
 
 
 def main(plotter: LogPlotter):
-    plotter.set_title("Custom")
+    run_name = "derp"
+
+    os.makedirs(f"ignored/grokking/{run_name}", exist_ok=False)
+    plotter.set_title(f"Grokking - {run_name}")
 
     p = 97
 
@@ -143,8 +146,9 @@ def main(plotter: LogPlotter):
 
     for bi in range(batches):
         if bi % 1000 == 0:
-            os.makedirs("ignored/grokking/model", exist_ok=True)
-            torch.jit.save(torch.jit.script(model), f"ignored/grokking/model/model_{bi}.pt")
+            os.makedirs(f"ignored/grokking/{run_name}/models/", exist_ok=True)
+            torch.jit.save(torch.jit.script(model), f"ignored/grokking/{run_name}/models/model_{bi}.pt")
+            logger.save(f"ignored/grokking/{run_name}/log.npz")
 
         print(f"bi {bi}")
         logger.start_batch()
@@ -172,7 +176,8 @@ def main(plotter: LogPlotter):
                 logger.log("grad", name, param.grad.abs().mean())
 
                 if bi >= 10:
-                    logger.log("grad scale", name, param.grad.abs().mean() / param.abs().mean())
+                    logger.log("grad/param", name, param.grad.abs().mean() / param.abs().mean())
+                    logger.log("log(grad/param)", name, torch.log10(param.grad.abs().mean() / param.abs().mean()))
 
         if bi < 10:
             set_optim_lr(optim, bi / 10 * lr)
