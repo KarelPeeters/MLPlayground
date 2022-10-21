@@ -1,3 +1,4 @@
+import itertools
 import os
 
 import torch.nn.functional as nnf
@@ -63,9 +64,9 @@ class Model(nn.Module):
         self.mask = nn.Parameter(nn.Transformer.generate_square_subsequent_mask(4), requires_grad=False)
 
         self.final_linear = nn.Linear(hidden_size, p)
-        # with torch.no_grad():
-        #     self.final_linear.bias *= 0
-        #     self.final_linear.weight *= 0.02
+        with torch.no_grad():
+            self.final_linear.bias *= 0
+            self.final_linear.weight *= 0.02
 
         self.zero = nn.Parameter(torch.tensor(0), requires_grad=False)
         self.one = nn.Parameter(torch.tensor(1), requires_grad=False)
@@ -96,11 +97,13 @@ def eval_model(logger: Logger, prefix: str, model, batch):
 
     pred = model(x, y)
 
-    loss = nnf.cross_entropy(pred, z)
+    # cast logits to f64 to fix loss spike
+    loss = nnf.cross_entropy(pred.double(), z)
     acc = (torch.argmax(pred, dim=1) == z).float().mean()
     mse = nnf.mse_loss(nnf.softmax(pred, dim=1), nnf.one_hot(z, model.p).float())
 
     logger.log("loss", prefix, loss)
+    logger.log("log(loss)", prefix, torch.log10(loss.abs()))
     logger.log("mse", prefix, mse)
     logger.log("acc", prefix, acc)
 
@@ -115,7 +118,7 @@ def set_optim_lr(optim, lr):
 
 
 def main(plotter: LogPlotter):
-    run_name = "derp"
+    run_name = "more_dropout_f64"
 
     os.makedirs(f"ignored/grokking/{run_name}", exist_ok=False)
     plotter.set_title(f"Grokking - {run_name}")
@@ -125,7 +128,6 @@ def main(plotter: LogPlotter):
     dropout = 0.1
     hidden_size = 128
     batch_size = 512
-    batches = int(1e5)
     lr = 1e-3
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -144,7 +146,7 @@ def main(plotter: LogPlotter):
 
     logger = Logger()
 
-    for bi in range(batches):
+    for bi in itertools.count():
         if bi % 1000 == 0:
             os.makedirs(f"ignored/grokking/{run_name}/models/", exist_ok=True)
             torch.jit.save(torch.jit.script(model), f"ignored/grokking/{run_name}/models/model_{bi}.pt")
