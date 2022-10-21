@@ -39,6 +39,9 @@ def main():
                     img_doubled = param_split.reshape(256 * 2, 97)
                     img_doubled_split = param_split.unsqueeze(1)
 
+                    img_fft = torch.fft.rfft(param_split[:, 0, :], dim=1).abs()
+                    img_fft[:, 0] = 0
+
                     os.makedirs(f"ignored/grokking/images/{name}_split/", exist_ok=True)
                     torchvision.utils.save_image(
                         img_split, f"ignored/grokking/images/{name}_split/{i}.png",
@@ -55,6 +58,12 @@ def main():
                     torchvision.utils.save_image(
                         img_doubled_split, f"ignored/grokking/images/{name}_doubled_split/{i}.png",
                         normalize=True, nrow=4, padding=1,
+                    )
+
+                    os.makedirs(f"ignored/grokking/images/{name}_fft", exist_ok=True)
+                    torchvision.utils.save_image(
+                        img_fft, f"ignored/grokking/images/{name}_fft/{i}.png",
+                        normalize=True,
                     )
 
                     # draw pca

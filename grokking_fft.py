@@ -30,9 +30,9 @@ with torch.no_grad():
 
     argsort = torch.argsort(max_freq_clear)
 
-    plt.hist(max_freq[clear_max, 0], bins=rfft_size)
-    plt.title("Embeddings per frequency")
-    plt.show()
+    # plt.hist(max_freq[clear_max, 0], bins=rfft_size)
+    # plt.title("Embeddings per frequency")
+    # plt.show()
 
     for i in range(len(rfft)):
         if max_freq[i, 0] != max_freq[i, 1]:

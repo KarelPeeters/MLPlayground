@@ -99,6 +99,16 @@ class TransformerModel(nn.Module):
         return pred_final
 
 
+def generate_sin_init(p: int, size: int):
+    # pick shared frequency but different phase for each split embedding
+    freq = torch.randint(p, (size,))
+    phase = torch.rand(size, 2) * (2 * torch.pi)
+    t = torch.arange(p)
+
+    weight_split = torch.sin(freq[:, None, None] * t[None, None, :] + phase[:, :, None])
+    return weight_split.view(size, 2 * p)
+
+
 class DenseModel(nn.Module):
     def __init__(self, p: int, depth: int, hidden_size: int, dropout: float):
         super().__init__()
@@ -116,6 +126,9 @@ class DenseModel(nn.Module):
             nn.LayerNorm(hidden_size),
             nn.Linear(hidden_size, p)
         )
+
+        with torch.no_grad():
+            self.inner[0].weight.copy_(generate_sin_init(p, hidden_size))
 
     def forward(self, x, y):
         input = torch.concat([
@@ -154,7 +167,7 @@ def set_optim_lr(optim, lr):
 
 
 def main(plotter: LogPlotter):
-    run_name = "dense"
+    run_name = "dense_sin_init"
 
     p = 97
 
