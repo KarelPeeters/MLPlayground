@@ -110,7 +110,7 @@ def generate_sin_init(p: int, size: int):
 
 
 class DenseModel(nn.Module):
-    def __init__(self, p: int, depth: int, hidden_size: int, dropout: float):
+    def __init__(self, p: int, depth: int, hidden_size: int, dropout: float, sin_init: bool):
         super().__init__()
         self.p = p
 
@@ -123,12 +123,13 @@ class DenseModel(nn.Module):
                 nn.ReLU(),
                 nn.Dropout1d(p=dropout)
             ) for _ in range(depth)),
-            nn.LayerNorm(hidden_size),
+            *([nn.LayerNorm(hidden_size)] if depth > 0 else []),
             nn.Linear(hidden_size, p)
         )
 
-        with torch.no_grad():
-            self.inner[0].weight.copy_(generate_sin_init(p, hidden_size))
+        if sin_init:
+            with torch.no_grad():
+                self.inner[0].weight.copy_(generate_sin_init(p, hidden_size))
 
     def forward(self, x, y):
         input = torch.concat([
@@ -167,14 +168,15 @@ def set_optim_lr(optim, lr):
 
 
 def main(plotter: LogPlotter):
-    run_name = "dense_sin_init"
+    run_name = "dense_shallow_no_ln"
 
     p = 97
 
     dropout = 0.1
-    hidden_size = 128
+    hidden_size = 256
     batch_size = 512
     lr = 1e-3
+    sin_init = False
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     train_fraction = 0.4
@@ -184,7 +186,7 @@ def main(plotter: LogPlotter):
     data_train, data_test = split_data(data_all, train_fraction)
 
     # model = TransformerModel(p=p, hidden_size=hidden_size, dropout=dropout)
-    model = DenseModel(p=p, depth=4, hidden_size=256, dropout=dropout)
+    model = DenseModel(p=p, depth=0, hidden_size=hidden_size, dropout=dropout, sin_init=sin_init)
     model.to(device)
 
     # print_params(model)
