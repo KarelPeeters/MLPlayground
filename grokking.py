@@ -48,7 +48,16 @@ def split_data(data, train_fraction: float):
     return data_train, data_test
 
 
-class Model(nn.Module):
+class Residual(nn.Module):
+    def __init__(self, *inner: nn.Module):
+        super().__init__()
+        self.inner = nn.Sequential(*inner)
+
+    def forward(self, x):
+        return x + self.inner(x)
+
+
+class TransformerModel(nn.Module):
     def __init__(self, p: int, hidden_size: int, dropout: float):
         super().__init__()
         self.p = p
@@ -90,6 +99,33 @@ class Model(nn.Module):
         return pred_final
 
 
+class DenseModel(nn.Module):
+    def __init__(self, p: int, depth: int, hidden_size: int, dropout: float):
+        super().__init__()
+        self.p = p
+
+        self.inner = nn.Sequential(
+            nn.Linear(2 * p, hidden_size),
+            nn.ReLU(),
+            *(Residual(
+                nn.LayerNorm(hidden_size),
+                nn.Linear(hidden_size, hidden_size),
+                nn.ReLU(),
+                nn.Dropout1d(p=dropout)
+            ) for _ in range(depth)),
+            nn.LayerNorm(hidden_size),
+            nn.Linear(hidden_size, p)
+        )
+
+    def forward(self, x, y):
+        input = torch.concat([
+            nnf.one_hot(x, self.p),
+            nnf.one_hot(y, self.p),
+        ], dim=1)
+
+        return self.inner(input.float())
+
+
 def eval_model(logger: Logger, prefix: str, model, batch):
     x = batch[:, 0]
     y = batch[:, 1]
@@ -118,10 +154,7 @@ def set_optim_lr(optim, lr):
 
 
 def main(plotter: LogPlotter):
-    run_name = "more_dropout_f64"
-
-    os.makedirs(f"ignored/grokking/{run_name}", exist_ok=False)
-    plotter.set_title(f"Grokking - {run_name}")
+    run_name = "dense"
 
     p = 97
 
@@ -132,19 +165,23 @@ def main(plotter: LogPlotter):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     train_fraction = 0.4
-    weight_decay = 0.01
+    weight_decay = 0.1
 
     data_all = generate_data(p).to(device)
     data_train, data_test = split_data(data_all, train_fraction)
 
-    model = Model(p=p, hidden_size=hidden_size, dropout=dropout)
+    # model = TransformerModel(p=p, hidden_size=hidden_size, dropout=dropout)
+    model = DenseModel(p=p, depth=4, hidden_size=256, dropout=dropout)
     model.to(device)
+
     # print_params(model)
 
-    # TODO linear learning rate warmup over first 10 steps
     optim = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.98), weight_decay=weight_decay)
 
+    os.makedirs(f"ignored/grokking/{run_name}", exist_ok=False)
+
     logger = Logger()
+    plotter.set_title(f"Grokking - {run_name}")
 
     for bi in itertools.count():
         if bi % 1000 == 0:
