@@ -29,19 +29,21 @@ class Head(nn.Module):
 
     def forward(self, stream, att_mask):
         # stream: BxSxN
+        # * we use ... instead of B to allow arbitrarily many batch dims, including none
+        # * in einsum we use q/k for the respective dims corresponding to S
 
         q = self.wq(stream)
         k = self.wk(stream)
         v = self.wv(stream)
 
         scale = self.proj_size ** 0.5
-        a_logit = torch.einsum("bsn,btn->bst", q, k) / scale
+        att_logit = torch.einsum("...qn,...kn->...qk", q, k) / scale
 
         if att_mask is not None:
-            a_logit = a_logit + att_mask
+            att_logit = att_logit + att_mask
 
-        att = nnf.softmax(a_logit, dim=-1)
-        att_combined = torch.einsum("bst,btn->bsn", att, v)
+        att = nnf.softmax(att_logit, dim=-1)
+        att_combined = torch.einsum("...qk,...kn->...qn", att, v)
 
         result = self.wo(att_combined)
         return result, att
