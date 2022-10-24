@@ -121,6 +121,23 @@ def generate_repeating_sequence(batch_size: int, seq_len: int, tokens: int, peri
     return data_int
 
 
+def generate_lookup_sequence(batch_size: int, seq_len: int, tokens: int):
+    noise = torch.randint(1, tokens, (batch_size, seq_len))
+
+    second = torch.randint(3, seq_len, (batch_size,))
+    first = (torch.rand(batch_size) * (second - 2) + 1).long()
+
+    assert torch.all(second - first > 1)
+
+    bi = torch.arange(batch_size)
+
+    noise[bi, first] = noise[bi, second]
+    noise[bi, second - 1] = 0
+    noise[bi, first - 1] = 0
+
+    return noise, second
+
+
 @torch.no_grad()
 def plots(model: Transformer, atts: List[List[torch.tensor]], plot_weights: bool):
     embed_matrix = model.un_embed.weight @ model.embed.weight
@@ -154,17 +171,13 @@ def plots(model: Transformer, atts: List[List[torch.tensor]], plot_weights: bool
                 plt.show()
 
     if len(atts) > 0:
-        head_count = len(atts) * len(atts[0])
-        f, axes = plt.subplots(int(head_count ** .5), ceil_div(head_count, int(head_count ** .5)))
+        layer_count = len(atts)
+        head_count = len(atts[0])
+        f, axes = plt.subplots(layer_count, head_count, squeeze=False)
 
         for li, layer_atts in enumerate(atts):
             for hi, head_att in enumerate(layer_atts):
-                index = li * len(layer_atts) + hi
-                if head_count == 1:
-                    ax = axes
-                else:
-                    ax = axes.flatten()[index]
-
+                ax = axes[li, hi]
                 ax.matshow(head_att[0, :, :].cpu())
                 ax.set_title(f"Att layer {li} head {hi}")
 
@@ -173,24 +186,24 @@ def plots(model: Transformer, atts: List[List[torch.tensor]], plot_weights: bool
 
 
 def main(plotter: LogPlotter):
-    run_name = "derp"
+    run_name = "repeating"
     run_path = f"ignored/circuits/{run_name}/"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     save_freq = 100
     plot_freq = 100
-    plot_weights = False
+    plot_weights = True
 
     if os.path.exists(run_path):
         shutil.rmtree(run_path)
 
-    tokens = 20
+    tokens = 10
     batch_size = 1024
     seq_length = 16
 
     stream_size = 128
-    proj_size = 16
+    proj_size = 32
     heads = 1
-    depth = 1
+    depth = 2
 
     mask = causal_mask(seq_length).to(device)
 
@@ -212,9 +225,12 @@ def main(plotter: LogPlotter):
         # data_int = generate_counting_seq(batch_size, seq_length + 1, tokens)
         # predictable_tokens = seq_length
 
-        period = 2
-        data_int = generate_repeating_sequence(batch_size, seq_length + 1, tokens, period)
-        predictable_tokens = seq_length - period + 1
+        # period = 2
+        # data_int = generate_repeating_sequence(batch_size, seq_length + 1, tokens, period)
+        # predictable_tokens = seq_length - period + 1
+
+        data_int, index_second = generate_lookup_sequence(batch_size, seq_length + 1, tokens)
+        predictable_tokens = 0
 
         data_int = data_int.to(device)
         data_one_hot = nnf.one_hot(data_int, tokens).float()
@@ -223,17 +239,24 @@ def main(plotter: LogPlotter):
 
         model.train()
         model_output, atts = model(model_input, mask)
-        # model_output = torch.cat([
-        #     nnf.one_hot(torch.zeros(batch_size, period - 1, dtype=torch.int64, device=device), tokens),
-        #     model_input[:, 0:-2, :]
-        # ], dim=1)
-        # atts = []
 
         if plot_freq != 0 and bi % plot_freq == 0:
             plots(model, atts, plot_weights)
 
+            print("Sequence predictions:")
+            for si in range(seq_length):
+                topk = torch.topk(model_output[0, si, :], k=4)
+                print(f"  {data_int[0, si]} -> {topk.indices.tolist()}")
+
         loss = nnf.cross_entropy(model_output.reshape(-1, tokens), model_target_int.reshape(-1))
         acc = (torch.argmax(model_output, -1) == model_target_int).float().mean()
+
+        brange = torch.arange(batch_size)
+        model_output_second = model_output[brange, index_second - 1, :]
+        model_target_int_second = model_target_int[brange, index_second - 1]
+
+        loss_second = nnf.cross_entropy(model_output_second, model_target_int_second)
+        acc_second = (torch.argmax(model_output_second, -1) == model_target_int_second).float().mean()
 
         loss_uniform = nnf.cross_entropy(torch.full((tokens,), 1 / tokens), torch.tensor(0))
         acc_uniform = 1 / tokens
@@ -241,11 +264,14 @@ def main(plotter: LogPlotter):
 
         logger.log("loss", "train", loss)
         logger.log("loss", "uniform", loss_uniform)
+        logger.log("loss", "second", loss_second)
         logger.log("log(loss)", "train", torch.log10(loss))
         logger.log("log(loss)", "uniform", torch.log10(loss_uniform))
+        logger.log("log(loss)", "second", torch.log10(loss_second))
         logger.log("acc", "train", acc)
         logger.log("acc", "uniform", acc_uniform)
         logger.log("acc", "max", acc_max)
+        logger.log("acc", "second", acc_second)
 
         optim.zero_grad()
         loss.backward()
