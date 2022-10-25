@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import torch
 
-from induction_head import causal_mask, Head
+from circuits_train import Head, causal_mask
 
 
 def print_tensor(name: str, t):

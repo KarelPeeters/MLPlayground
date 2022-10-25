@@ -81,9 +81,11 @@ class Transformer(nn.Module):
         # tokens: BxSxT one-hot encoded
         stream = self.embed(tokens)
         atts = []
+        streams = []
 
         if self.pos_encoding is not None:
             stream = stream + self.pos_encoding.expand(1, -1, self.stream_size)
+        streams.append(stream)
 
         for layer in self.layers:
             layer: nn.ModuleList
@@ -97,10 +99,11 @@ class Transformer(nn.Module):
                 layer_atts.append(head_att)
 
             stream = stream + layer_delta
+            streams.append(stream)
             atts.append(layer_atts)
 
         logits = self.un_embed(stream)
-        return logits, atts
+        return logits, atts, streams
 
 
 def generate_counting_seq(batch_size: int, seq_len: int, tokens: int):
@@ -209,7 +212,10 @@ def main(plotter: LogPlotter):
 
     model = Transformer(tokens, depth, stream_size, proj_size, heads, None)
     model.to(device)
-    optim = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
+
+    weight_decay = 0.1
+    stream_decay = 0.0
+    optim = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=weight_decay)
 
     logger = Logger()
     os.makedirs(run_path, exist_ok=False)
@@ -238,7 +244,7 @@ def main(plotter: LogPlotter):
         model_target_int = data_int[:, 1:]
 
         model.train()
-        model_output, atts = model(model_input, mask)
+        model_output, atts, streams = model(model_input, mask)
 
         if plot_freq != 0 and bi % plot_freq == 0:
             plots(model, atts, plot_weights)
@@ -248,8 +254,10 @@ def main(plotter: LogPlotter):
                 topk = torch.topk(model_output[0, si, :], k=4)
                 print(f"  {data_int[0, si]} -> {topk.indices.tolist()}")
 
-        loss = nnf.cross_entropy(model_output.reshape(-1, tokens), model_target_int.reshape(-1))
+        loss = nnf.cross_entropy(model_output.reshape(-1, tokens).double(), model_target_int.reshape(-1))
         acc = (torch.argmax(model_output, -1) == model_target_int).float().mean()
+
+        stream_weight = sum((s * s).mean() for s in streams)
 
         brange = torch.arange(batch_size)
         model_output_second = model_output[brange, index_second - 1, :]
@@ -272,9 +280,12 @@ def main(plotter: LogPlotter):
         logger.log("acc", "uniform", acc_uniform)
         logger.log("acc", "max", acc_max)
         logger.log("acc", "second", acc_second)
+        logger.log("acc", "1", 1)
+
+        logger.log("norm", "stream_weight", stream_weight)
 
         optim.zero_grad()
-        loss.backward()
+        (loss + stream_decay * stream_weight).backward()
         optim.step()
 
         for name, param in model.named_parameters():
