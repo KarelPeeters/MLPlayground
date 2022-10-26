@@ -6,6 +6,7 @@ from typing import Optional, List
 import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as nnf
+import torchvision.utils
 from torch import nn
 
 from lib.logger import Logger
@@ -142,22 +143,29 @@ def generate_lookup_sequence(batch_size: int, seq_len: int, tokens: int):
 
 
 @torch.no_grad()
-def plots(model: Transformer, atts: List[List[torch.tensor]], plot_weights: bool):
-    embed_matrix = model.un_embed.weight @ model.embed.weight
+def plots(model: Transformer, atts: List[List[torch.tensor]], plot_weights: bool, run_path: str, bi: int):
+    plot_path = os.path.join(run_path, "plots")
+    os.makedirs(plot_path, exist_ok=True)
 
     if plot_weights:
+        embed_matrix = model.un_embed.weight @ model.embed.weight
+
         plt.matshow(embed_matrix.cpu())
         plt.ylabel("output token")
         plt.xlabel("input token")
         plt.title("Wu @ We")
-        plt.show()
+        plt.colorbar()
+        plt.savefig(os.path.join(plot_path, f"embedding_{bi}.png"))
+        plt.close()
 
         if model.pos_encoding is not None:
             plt.matshow((model.un_embed.weight @ model.pos_encoding.T).cpu())
             plt.ylabel("output token")
             plt.xlabel("stream_size")
             plt.title("Wu @ Epos")
-            plt.show()
+            plt.colorbar()
+            plt.savefig(os.path.join(plot_path, f"pos_encoding_{bi}.png"))
+            plt.close()
 
         if len(model.layers) > 0:
             if len(model.layers[0]) > 0:
@@ -167,29 +175,30 @@ def plots(model: Transformer, atts: List[List[torch.tensor]], plot_weights: bool
                 head_matrix = model.un_embed.weight @ head.wo.weight @ head.wv.weight @ model.embed.weight
                 plt.matshow(head_matrix.cpu())
                 plt.title("Wu @ (Wo_11 @ Wv_11) @ We")
-                plt.show()
+                plt.colorbar()
+                plt.savefig(os.path.join(plot_path, f"head_matrix_{bi}.png"))
+                plt.close()
 
                 plt.matshow((embed_matrix + head_matrix).cpu())
                 plt.title("Wu @ We + Wu @ (Wo_11 @ Wv_11) @ We")
-                plt.show()
+                plt.colorbar()
+                plt.savefig(os.path.join(plot_path, f"combined_matrix_{bi}.png"))
+                plt.close()
 
     if len(atts) > 0:
-        layer_count = len(atts)
-        head_count = len(atts[0])
-        f, axes = plt.subplots(layer_count, head_count, squeeze=False)
+        atts_tensor = torch.stack([torch.stack(layer_atts) for layer_atts in atts])
 
-        for li, layer_atts in enumerate(atts):
-            for hi, head_att in enumerate(layer_atts):
-                ax = axes[li, hi]
-                ax.matshow(head_att[0, :, :].cpu())
-                ax.set_title(f"Att layer {li} head {hi}")
+        # shape (layers, heads, batch, query, key)
+        layers, heads, _, q_count, k_count = atts_tensor.shape
+        total_heads = layers * heads
 
-        f.tight_layout()
-        f.show()
+        att_image = atts_tensor[:, :, 0, :, :].view(total_heads, 1, q_count, k_count)
+        att_path = os.path.join(plot_path, f"att_{bi}.png")
+        torchvision.utils.save_image(att_image, att_path, nrow=heads, normalize=True)
 
 
 def main(plotter: LogPlotter):
-    run_name = "repeating"
+    run_name = "repeating_new"
     run_path = f"ignored/circuits/{run_name}/"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     save_freq = 100
@@ -215,7 +224,10 @@ def main(plotter: LogPlotter):
 
     weight_decay = 0.1
     stream_decay = 0.0
-    optim = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=weight_decay)
+    weight_decay_abs = 0.0
+    knowable_focus = 0.0
+
+    optim = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=weight_decay)
 
     logger = Logger()
     os.makedirs(run_path, exist_ok=False)
@@ -225,7 +237,9 @@ def main(plotter: LogPlotter):
         logger.start_batch()
 
         if save_freq != 0 and bi % save_freq == 0:
-            torch.save(model, os.path.join(run_path, f"model_{bi}.pt"))
+            os.makedirs(os.path.join(run_path, "models"), exist_ok=True)
+            torch.save(model, os.path.join(run_path, "models", f"model_{bi}.pt"))
+            logger.save(os.path.join(run_path, "log.npz"))
 
         # generate data
         # data_int = generate_counting_seq(batch_size, seq_length + 1, tokens)
@@ -247,7 +261,7 @@ def main(plotter: LogPlotter):
         model_output, atts, streams = model(model_input, mask)
 
         if plot_freq != 0 and bi % plot_freq == 0:
-            plots(model, atts, plot_weights)
+            plots(model, atts, plot_weights, run_path, bi)
 
             print("Sequence predictions:")
             for si in range(seq_length):
@@ -285,7 +299,13 @@ def main(plotter: LogPlotter):
         logger.log("norm", "stream_weight", stream_weight)
 
         optim.zero_grad()
-        (loss + stream_decay * stream_weight).backward()
+
+        total_loss = loss
+        total_loss += knowable_focus * loss_second
+        total_loss += stream_decay * stream_weight
+        total_loss += weight_decay_abs * sum(param.abs().mean() for param in model.parameters())
+
+        total_loss.backward()
         optim.step()
 
         for name, param in model.named_parameters():
