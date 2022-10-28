@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import List
 
 import einops
 import torch
@@ -95,3 +96,31 @@ def generate_sample_lookup(batch_size: int, seq_len: int, tokens: int):
         # (we're still missing a small bonus for the possibly higher zero probability)
         predictable
     )
+
+
+def generate_multi_lookback(batch_size: int, seq_len: int, tokens: int, deltas: List[int]):
+    assert all(d >= 0 for d in deltas)
+    max_delta = max(deltas)
+
+    all_tokens = torch.randint(tokens, (batch_size, seq_len + max_delta))
+    all_pred = torch.full((seq_len + max_delta,), True)
+    all_pred[:max_delta] = False
+
+    input_tokens = all_tokens[:, max_delta:]
+
+    output_tokens = []
+    pred = []
+
+    for d in deltas:
+        offset = max_delta - d
+        output_tokens.append(all_tokens[:, offset:offset + seq_len])
+        pred.append(all_pred[offset:offset + seq_len])
+
+    sample = Sample(
+        batch_size, seq_len, len(deltas),
+        input_tokens,
+        torch.stack(output_tokens, dim=2),
+        einops.repeat(torch.stack(pred, dim=1), "s c -> b s c", b=batch_size),
+    )
+
+    return sample

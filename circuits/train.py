@@ -132,7 +132,7 @@ def plots(model: TokenTransformer, atts: List[List[torch.tensor]], plot_weights:
     plot_path = os.path.join(run_path, "plots")
     os.makedirs(plot_path, exist_ok=True)
 
-    if plot_weights:
+    if plot_weights and model.output_token_count == 1:
         embed_matrix = model.un_embed.weight @ model.embed.weight
 
         plt.matshow(embed_matrix.cpu())
@@ -183,7 +183,7 @@ def plots(model: TokenTransformer, atts: List[List[torch.tensor]], plot_weights:
 
 
 def main(plotter: LogPlotter):
-    run_name = "token_transformer"
+    run_name = "lookup_new"
     run_path = f"../ignored/circuits/{run_name}/"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     save_freq = 100
@@ -195,22 +195,30 @@ def main(plotter: LogPlotter):
 
     tokens = 10
     batch_size = 1024
-    seq_len = 16
+    seq_len = 32
 
     stream_size = 128
     proj_size = 32
-    heads = 4
-    depth = 4
+    heads = 1
+    depth = 2
+
+    def generator():
+        # return generate.generate_sample_counting(batch_size, seq_len, tokens)
+        # return generate.generate_sample_repeating(batch_size, seq_len, tokens, 3)
+        return generate.generate_sample_lookup(batch_size, seq_len, tokens)
+        # return generate.generate_multi_lookback(batch_size, seq_len, tokens, [1])
+
+    output_token_count = 1
 
     mask = causal_mask(seq_len).to(device)
 
-    model = TokenTransformer(Transformer(depth, heads, stream_size, proj_size), tokens, 1, None)
+    model = TokenTransformer(Transformer(depth, heads, stream_size, proj_size), tokens, output_token_count, None)
     model.to(device)
 
     l2_weight = 0.1
     l2_stream = 0.0
     l1_weight = 0.0
-    predictable_focus = 0.0
+    predictable_focus = 1
 
     optim = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=l2_weight)
 
@@ -227,13 +235,12 @@ def main(plotter: LogPlotter):
             logger.save(os.path.join(run_path, "log.npz"))
 
         # generate data
-        # sample = generate.generate_sample_counting(batch_size, seq_len, tokens)
-        # sample = generate.generate_sample_repeating(batch_size, seq_len, tokens, 3)
-        sample = generate.generate_sample_lookup(batch_size, seq_len, tokens)
+        sample = generator()
 
+        assert sample.output_token_count == model.output_token_count
         sample = sample.to(device)
         predictable_count = sample.predictable.sum()
-        token_count = batch_size * seq_len
+        token_count = batch_size * seq_len * output_token_count
 
         # run the model
         model_input = nnf.one_hot(sample.input_tokens, tokens).float()
@@ -249,7 +256,8 @@ def main(plotter: LogPlotter):
             for si in range(seq_len):
                 topk_list = topk.indices[si, :, ].tolist()
                 pred_list = sample.predictable[0, si, :].tolist()
-                print(f"  {sample.input_tokens[0, si]} -> {topk_list} {pred_list}")
+                target_list = sample.output_tokens[0, si, :].tolist()
+                print(f"  {sample.input_tokens[0, si]} -> {topk_list} {target_list} pred {pred_list}")
 
         # compute metrics
         assert model_output.shape == sample.output_tokens.shape + (tokens,), \
