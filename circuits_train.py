@@ -50,33 +50,6 @@ class Head(nn.Module):
         return result, att
 
 
-class TokenTransformer(nn.Module):
-    def __init__(
-            self,
-            depth: int, heads: int,
-            stream_size: int, proj_size: int,
-            tokens: int, pos_encoding_length: Optional[int],
-    ):
-        super().__init__()
-
-        if pos_encoding_length is not None:
-            self.pos_encoding = nn.Parameter(torch.randn(pos_encoding_length, stream_size))
-        else:
-            self.pos_encoding = None
-
-        self.embed = nn.Linear(tokens, stream_size, bias=False)
-        self.un_embed = nn.Linear(stream_size, tokens, bias=False)
-
-        self.transformer = Transformer(depth, heads, stream_size, proj_size)
-
-    def forward(self, tokens, att_mask):
-        # tokens: ...xSxT one-hot encoded
-        embedded = self.embed(tokens)
-        result, attn, streams = self.transformer(embedded, att_mask)
-        logits = self.un_embed(result)
-        return logits, attn, streams
-
-
 class Transformer(nn.Module):
     def __init__(
             self,
@@ -114,6 +87,34 @@ class Transformer(nn.Module):
             atts.append(layer_atts)
 
         return stream, atts, streams
+
+
+class TokenTransformer(nn.Module):
+    def __init__(
+            self,
+            transformer: Transformer,
+            tokens: int,
+            pos_encoding_length: Optional[int],
+    ):
+        super().__init__()
+
+        stream_size = transformer.stream_size
+
+        if pos_encoding_length is not None:
+            self.pos_encoding = nn.Parameter(torch.randn(pos_encoding_length, stream_size))
+        else:
+            self.pos_encoding = None
+
+        self.embed = nn.Linear(tokens, stream_size, bias=False)
+        self.transformer = transformer
+        self.un_embed = nn.Linear(stream_size, tokens, bias=False)
+
+    def forward(self, tokens, att_mask):
+        # tokens: ...xSxT one-hot encoded
+        embedded = self.embed(tokens)
+        result, attn, streams = self.transformer(embedded, att_mask)
+        logits = self.un_embed(result)
+        return logits, attn, streams
 
 
 def generate_counting_seq(batch_size: int, seq_len: int, tokens: int):
@@ -228,7 +229,7 @@ def main(plotter: LogPlotter):
 
     mask = causal_mask(seq_length).to(device)
 
-    model = TokenTransformer(depth, heads, stream_size, proj_size, tokens, None)
+    model = TokenTransformer(Transformer(depth, heads, stream_size, proj_size), tokens, None)
     model.to(device)
 
     weight_decay = 0.1
