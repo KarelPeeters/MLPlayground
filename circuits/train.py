@@ -3,12 +3,14 @@ import os
 import shutil
 from typing import Optional, List
 
+import einops
 import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as nnf
 import torchvision.utils
 from torch import nn
 
+from circuits.sample import generate_sample_counting
 from lib.logger import Logger
 from lib.plotter import LogPlotter, run_with_plotter
 
@@ -94,11 +96,13 @@ class TokenTransformer(nn.Module):
             self,
             transformer: Transformer,
             tokens: int,
+            output_token_count: int,
             pos_encoding_length: Optional[int],
     ):
         super().__init__()
 
         stream_size = transformer.stream_size
+        self.output_token_count = output_token_count
 
         if pos_encoding_length is not None:
             self.pos_encoding = nn.Parameter(torch.randn(pos_encoding_length, stream_size))
@@ -107,49 +111,20 @@ class TokenTransformer(nn.Module):
 
         self.embed = nn.Linear(tokens, stream_size, bias=False)
         self.transformer = transformer
-        self.un_embed = nn.Linear(stream_size, tokens, bias=False)
+
+        assert stream_size % output_token_count == 0
+        self.un_embed = nn.Linear(stream_size // output_token_count, tokens, bias=False)
 
     def forward(self, tokens, att_mask):
         # tokens: ...xSxT one-hot encoded
         embedded = self.embed(tokens)
         result, attn, streams = self.transformer(embedded, att_mask)
-        logits = self.un_embed(result)
-        return logits, attn, streams
 
+        result_split = einops.rearrange(result, "... s (c n) -> ... s c n", c=self.output_token_count)
 
-def generate_counting_seq(batch_size: int, seq_len: int, tokens: int):
-    assert tokens > seq_len
-    starts = torch.randint(tokens - seq_len + 1, (batch_size,))
-    data_int = starts[:, None] + torch.arange(seq_len)[None, :]
-    return data_int
+        logits_split = self.un_embed(result_split)
 
-
-def ceil_div(x, y):
-    return -(x // -y)
-
-
-def generate_repeating_sequence(batch_size: int, seq_len: int, tokens: int, period: int):
-    starts = torch.randint(tokens, (batch_size, period))
-    repeated = starts.repeat(1, ceil_div(seq_len, period))
-    data_int = repeated[:, :seq_len]
-    return data_int
-
-
-def generate_lookup_sequence(batch_size: int, seq_len: int, tokens: int):
-    noise = torch.randint(1, tokens, (batch_size, seq_len))
-
-    second = torch.randint(3, seq_len, (batch_size,))
-    first = (torch.rand(batch_size) * (second - 2) + 1).long()
-
-    assert torch.all(second - first > 1)
-
-    bi = torch.arange(batch_size)
-
-    noise[bi, first] = noise[bi, second]
-    noise[bi, second - 1] = 0
-    noise[bi, first - 1] = 0
-
-    return noise, second
+        return logits_split, attn, streams
 
 
 @torch.no_grad()
@@ -209,7 +184,7 @@ def plots(model: TokenTransformer, atts: List[List[torch.tensor]], plot_weights:
 
 def main(plotter: LogPlotter):
     run_name = "token_transformer"
-    run_path = f"ignored/circuits/{run_name}/"
+    run_path = f"../ignored/circuits/{run_name}/"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     save_freq = 100
     plot_freq = 100
@@ -220,24 +195,24 @@ def main(plotter: LogPlotter):
 
     tokens = 10
     batch_size = 1024
-    seq_length = 16
+    seq_len = 8
 
     stream_size = 128
     proj_size = 32
     heads = 1
     depth = 2
 
-    mask = causal_mask(seq_length).to(device)
+    mask = causal_mask(seq_len).to(device)
 
-    model = TokenTransformer(Transformer(depth, heads, stream_size, proj_size), tokens, None)
+    model = TokenTransformer(Transformer(depth, heads, stream_size, proj_size), tokens, 1, None)
     model.to(device)
 
-    weight_decay = 0.1
-    stream_decay = 0.0
-    weight_decay_abs = 0.0
+    l2_weight = 0.1
+    l2_stream = 0.0
+    l1_weight = 0.0
     knowable_focus = 0.0
 
-    optim = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=weight_decay)
+    optim = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=l2_weight)
 
     logger = Logger()
     os.makedirs(run_path, exist_ok=False)
@@ -252,72 +227,69 @@ def main(plotter: LogPlotter):
             logger.save(os.path.join(run_path, "log.npz"))
 
         # generate data
-        # data_int = generate_counting_seq(batch_size, seq_length + 1, tokens)
-        # predictable_tokens = seq_length
+        sample = generate_sample_counting(batch_size, seq_len, tokens)
+        sample = sample.to(device)
 
-        # period = 2
-        # data_int = generate_repeating_sequence(batch_size, seq_length + 1, tokens, period)
-        # predictable_tokens = seq_length - period + 1
+        knowable_count = sample.knowable.sum()
+        token_count = batch_size * seq_len
 
-        data_int, index_second = generate_lookup_sequence(batch_size, seq_length + 1, tokens)
-        predictable_tokens = 0
-
-        data_int = data_int.to(device)
-        data_one_hot = nnf.one_hot(data_int, tokens).float()
-        model_input = data_one_hot[:, :-1, :]
-        model_target_int = data_int[:, 1:]
-
+        # run the model
+        model_input = nnf.one_hot(sample.input_tokens, tokens).float()
         model.train()
         model_output, atts, streams = model(model_input, mask)
 
+        #  plot things
         if plot_freq != 0 and bi % plot_freq == 0:
             plots(model, atts, plot_weights, run_path, bi)
 
-            print("Sequence predictions:")
-            for si in range(seq_length):
-                topk = torch.topk(model_output[0, si, :], k=4)
-                print(f"  {data_int[0, si]} -> {topk.indices.tolist()}")
+        # compute metrics
+        assert model_output.shape == sample.output_tokens.shape + (tokens,), \
+            f"Output shape mismatch, {model_output.shape} vs {sample.output_tokens.shape}"
 
-        loss = nnf.cross_entropy(model_output.reshape(-1, tokens).double(), model_target_int.reshape(-1))
-        acc = (torch.argmax(model_output, -1) == model_target_int).float().mean()
+        loss_individual = nnf.cross_entropy(
+            model_output.reshape(-1, tokens).double(),
+            sample.output_tokens.reshape(-1),
+            reduction="none"
+        ).view(sample.output_tokens.shape)
+        acc_individual = (torch.argmax(model_output, -1) == sample.output_tokens)
 
-        stream_weight = sum((s * s).mean() for s in streams)
+        loss_all = loss_individual.mean()
+        loss_knowable = (loss_individual * sample.knowable).sum() / knowable_count
 
-        brange = torch.arange(batch_size)
-        model_output_second = model_output[brange, index_second - 1, :]
-        model_target_int_second = model_target_int[brange, index_second - 1]
-
-        loss_second = nnf.cross_entropy(model_output_second, model_target_int_second)
-        acc_second = (torch.argmax(model_output_second, -1) == model_target_int_second).float().mean()
+        acc_all = acc_individual.float().mean()
+        acc_knowable = (acc_individual * sample.knowable).sum() / knowable_count
 
         loss_uniform = nnf.cross_entropy(torch.full((tokens,), 1 / tokens), torch.tensor(0))
         acc_uniform = 1 / tokens
-        acc_max = ((seq_length - predictable_tokens) * 1 / tokens + predictable_tokens) / seq_length
 
-        logger.log("loss", "train", loss)
+        acc_all_max = (knowable_count + (token_count - knowable_count) / tokens) / token_count
+
+        logger.log("loss", "train", loss_all)
         logger.log("loss", "uniform", loss_uniform)
-        logger.log("loss", "second", loss_second)
-        logger.log("log(loss)", "train", torch.log10(loss))
+        logger.log("loss", "knowable", loss_knowable)
+        logger.log("log(loss)", "train", torch.log10(loss_all))
         logger.log("log(loss)", "uniform", torch.log10(loss_uniform))
-        logger.log("log(loss)", "second", torch.log10(loss_second))
-        logger.log("acc", "train", acc)
+        logger.log("log(loss)", "knowable", torch.log10(loss_knowable))
+        logger.log("acc", "train", acc_all)
         logger.log("acc", "uniform", acc_uniform)
-        logger.log("acc", "max", acc_max)
-        logger.log("acc", "second", acc_second)
+        logger.log("acc", "max", acc_all_max)
+        logger.log("acc", "knowable", acc_knowable)
         logger.log("acc", "1", 1)
 
+        stream_weight = sum((s * s).mean() for s in streams)
         logger.log("norm", "stream_weight", stream_weight)
 
+        # training loss and backward step
+        total_loss = loss_all
+        total_loss += knowable_focus * loss_knowable
+        total_loss += l2_stream * stream_weight
+        total_loss += l1_weight * sum(param.abs().mean() for param in model.parameters())
+
         optim.zero_grad()
-
-        total_loss = loss
-        total_loss += knowable_focus * loss_second
-        total_loss += stream_decay * stream_weight
-        total_loss += weight_decay_abs * sum(param.abs().mean() for param in model.parameters())
-
         total_loss.backward()
         optim.step()
 
+        # log more things
         for name, param in model.named_parameters():
             logger.log("param", name, param.abs().mean())
             grad_ratio = param.grad.abs().mean() / param.abs().mean()
