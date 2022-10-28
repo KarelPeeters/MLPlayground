@@ -50,13 +50,12 @@ class Head(nn.Module):
         return result, att
 
 
-class Transformer(nn.Module):
+class TokenTransformer(nn.Module):
     def __init__(
             self,
-            tokens: int, depth: int,
+            depth: int, heads: int,
             stream_size: int, proj_size: int,
-            heads: int,
-            pos_encoding_length: Optional[int]
+            tokens: int, pos_encoding_length: Optional[int],
     ):
         super().__init__()
 
@@ -65,10 +64,27 @@ class Transformer(nn.Module):
         else:
             self.pos_encoding = None
 
-        self.stream_size = stream_size
-
         self.embed = nn.Linear(tokens, stream_size, bias=False)
         self.un_embed = nn.Linear(stream_size, tokens, bias=False)
+
+        self.transformer = Transformer(depth, heads, stream_size, proj_size)
+
+    def forward(self, tokens, att_mask):
+        # tokens: ...xSxT one-hot encoded
+        embedded = self.embed(tokens)
+        result, attn, streams = self.transformer(embedded, att_mask)
+        logits = self.un_embed(result)
+        return logits, attn, streams
+
+
+class Transformer(nn.Module):
+    def __init__(
+            self,
+            depth: int, heads: int,
+            stream_size: int, proj_size: int,
+    ):
+        super().__init__()
+        self.stream_size = stream_size
 
         self.layers = nn.ModuleList(
             nn.ModuleList(
@@ -78,15 +94,9 @@ class Transformer(nn.Module):
             for _ in range(depth)
         )
 
-    def forward(self, tokens, att_mask):
-        # tokens: BxSxT one-hot encoded
-        stream = self.embed(tokens)
+    def forward(self, stream, att_mask):
         atts = []
-        streams = []
-
-        if self.pos_encoding is not None:
-            stream = stream + self.pos_encoding.expand(1, -1, self.stream_size)
-        streams.append(stream)
+        streams = [stream]
 
         for layer in self.layers:
             layer: nn.ModuleList
@@ -103,8 +113,7 @@ class Transformer(nn.Module):
             streams.append(stream)
             atts.append(layer_atts)
 
-        logits = self.un_embed(stream)
-        return logits, atts, streams
+        return stream, atts, streams
 
 
 def generate_counting_seq(batch_size: int, seq_len: int, tokens: int):
@@ -143,7 +152,7 @@ def generate_lookup_sequence(batch_size: int, seq_len: int, tokens: int):
 
 
 @torch.no_grad()
-def plots(model: Transformer, atts: List[List[torch.tensor]], plot_weights: bool, run_path: str, bi: int):
+def plots(model: TokenTransformer, atts: List[List[torch.tensor]], plot_weights: bool, run_path: str, bi: int):
     plot_path = os.path.join(run_path, "plots")
     os.makedirs(plot_path, exist_ok=True)
 
@@ -167,9 +176,9 @@ def plots(model: Transformer, atts: List[List[torch.tensor]], plot_weights: bool
             plt.savefig(os.path.join(plot_path, f"pos_encoding_{bi}.png"))
             plt.close()
 
-        if len(model.layers) > 0:
-            if len(model.layers[0]) > 0:
-                head: nn.Module = model.layers[0][0]
+        if len(model.transformer.layers) > 0:
+            if len(model.transformer.layers[0]) > 0:
+                head: nn.Module = model.transformer.layers[0][0]
                 head: Head
 
                 head_matrix = model.un_embed.weight @ head.wo.weight @ head.wv.weight @ model.embed.weight
@@ -198,7 +207,7 @@ def plots(model: Transformer, atts: List[List[torch.tensor]], plot_weights: bool
 
 
 def main(plotter: LogPlotter):
-    run_name = "repeating_new"
+    run_name = "token_transformer"
     run_path = f"ignored/circuits/{run_name}/"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     save_freq = 100
@@ -219,7 +228,7 @@ def main(plotter: LogPlotter):
 
     mask = causal_mask(seq_length).to(device)
 
-    model = Transformer(tokens, depth, stream_size, proj_size, heads, None)
+    model = TokenTransformer(depth, heads, stream_size, proj_size, tokens, None)
     model.to(device)
 
     weight_decay = 0.1
