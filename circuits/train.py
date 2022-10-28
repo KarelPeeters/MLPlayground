@@ -10,7 +10,7 @@ import torch.nn.functional as nnf
 import torchvision.utils
 from torch import nn
 
-from circuits.sample import generate_sample_counting
+from circuits import generate
 from lib.logger import Logger
 from lib.plotter import LogPlotter, run_with_plotter
 
@@ -195,12 +195,12 @@ def main(plotter: LogPlotter):
 
     tokens = 10
     batch_size = 1024
-    seq_len = 8
+    seq_len = 16
 
     stream_size = 128
     proj_size = 32
-    heads = 1
-    depth = 2
+    heads = 4
+    depth = 4
 
     mask = causal_mask(seq_len).to(device)
 
@@ -210,7 +210,7 @@ def main(plotter: LogPlotter):
     l2_weight = 0.1
     l2_stream = 0.0
     l1_weight = 0.0
-    knowable_focus = 0.0
+    predictable_focus = 0.0
 
     optim = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=l2_weight)
 
@@ -227,10 +227,12 @@ def main(plotter: LogPlotter):
             logger.save(os.path.join(run_path, "log.npz"))
 
         # generate data
-        sample = generate_sample_counting(batch_size, seq_len, tokens)
-        sample = sample.to(device)
+        # sample = generate.generate_sample_counting(batch_size, seq_len, tokens)
+        # sample = generate.generate_sample_repeating(batch_size, seq_len, tokens, 3)
+        sample = generate.generate_sample_lookup(batch_size, seq_len, tokens)
 
-        knowable_count = sample.knowable.sum()
+        sample = sample.to(device)
+        predictable_count = sample.predictable.sum()
         token_count = batch_size * seq_len
 
         # run the model
@@ -241,6 +243,13 @@ def main(plotter: LogPlotter):
         #  plot things
         if plot_freq != 0 and bi % plot_freq == 0:
             plots(model, atts, plot_weights, run_path, bi)
+
+            print("Sequence predictions:")
+            topk = torch.topk(model_output[0, :, :, :], k=2, dim=-1)
+            for si in range(seq_len):
+                topk_list = topk.indices[si, :, ].tolist()
+                pred_list = sample.predictable[0, si, :].tolist()
+                print(f"  {sample.input_tokens[0, si]} -> {topk_list} {pred_list}")
 
         # compute metrics
         assert model_output.shape == sample.output_tokens.shape + (tokens,), \
@@ -254,26 +263,26 @@ def main(plotter: LogPlotter):
         acc_individual = (torch.argmax(model_output, -1) == sample.output_tokens)
 
         loss_all = loss_individual.mean()
-        loss_knowable = (loss_individual * sample.knowable).sum() / knowable_count
+        loss_predictable = (loss_individual * sample.predictable).sum() / predictable_count
 
         acc_all = acc_individual.float().mean()
-        acc_knowable = (acc_individual * sample.knowable).sum() / knowable_count
+        acc_predictable = (acc_individual * sample.predictable).sum() / predictable_count
 
         loss_uniform = nnf.cross_entropy(torch.full((tokens,), 1 / tokens), torch.tensor(0))
         acc_uniform = 1 / tokens
 
-        acc_all_max = (knowable_count + (token_count - knowable_count) / tokens) / token_count
+        acc_all_max = (predictable_count + (token_count - predictable_count) / tokens) / token_count
 
         logger.log("loss", "train", loss_all)
         logger.log("loss", "uniform", loss_uniform)
-        logger.log("loss", "knowable", loss_knowable)
+        logger.log("loss", "predictable", loss_predictable)
         logger.log("log(loss)", "train", torch.log10(loss_all))
         logger.log("log(loss)", "uniform", torch.log10(loss_uniform))
-        logger.log("log(loss)", "knowable", torch.log10(loss_knowable))
+        logger.log("log(loss)", "predictable", torch.log10(loss_predictable))
         logger.log("acc", "train", acc_all)
         logger.log("acc", "uniform", acc_uniform)
         logger.log("acc", "max", acc_all_max)
-        logger.log("acc", "knowable", acc_knowable)
+        logger.log("acc", "predictable", acc_predictable)
         logger.log("acc", "1", 1)
 
         stream_weight = sum((s * s).mean() for s in streams)
@@ -281,7 +290,7 @@ def main(plotter: LogPlotter):
 
         # training loss and backward step
         total_loss = loss_all
-        total_loss += knowable_focus * loss_knowable
+        total_loss += predictable_focus * loss_predictable
         total_loss += l2_stream * stream_weight
         total_loss += l1_weight * sum(param.abs().mean() for param in model.parameters())
 
