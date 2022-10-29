@@ -58,6 +58,10 @@ def main():
     mask0 = mask.clone()
     mask1 = mask.clone()
 
+    # head0 Q=0 does not seem to matter much
+    # mask0[3, 1:] = -torch.inf
+    # mask0[13, 1:] = -torch.inf
+
     force_masks = False
     if force_masks:
         # first head 1e-2 triangle is no longer important with strict K-only composition?
@@ -138,13 +142,32 @@ def main():
     plot_matrix(delta0, "act raw delta 0", "seq", "n", s_min_max)
     plot_matrix(delta1, "act raw delta 1", "seq", "n", s_min_max)
 
-    plot_matrix(head0.wq(stream0), "act raw head 0 0.Q", "seq", None)
-    plot_matrix(head0.wk(stream0), "act raw head 0 1.K", "seq", None)
-    plot_matrix(head0.wv(stream0), "act raw head 0 2.V", "seq", None)
+    head0_q = head0.wq(stream0)
+    head0_k = head0.wk(stream0)
+    head0_v = head0.wv(stream0)
+    head1_q = head1.wq(stream0)  # no Q-comp
+    head1_k = head1.wk(stream1)
+    head1_v = head1.wv(stream0)  # no V-comp
 
-    plot_matrix(head1.wq(stream0), "act raw head 1 0.Q", "seq", None)
-    plot_matrix(head1.wk(stream1), "act raw head 1 1.K", "seq", None)
-    plot_matrix(head1.wv(stream0), "act raw head 1 2.V", "seq", None)
+    plot_matrix(head0_q, "act raw head 0 0.Q", "seq", None)
+    plot_matrix(head0_k, "act raw head 0 1.K", "seq", None)
+    plot_matrix(head0_v, "act raw head 0 2.V", "seq", None)
+
+    plot_matrix(head1_q, "act raw head 1 0.Q", "seq", None)
+    plot_matrix(head1_k, "act raw head 1 1.K", "seq", None)
+    plot_matrix(head1_v, "act raw head 1 2.V", "seq", None)
+
+    head0_q_n = head0_q[0, :]
+    head0_q_z = head0_q[3, :]
+    head0_k_n = head0_k[0, :]
+    head0_k_z = head0_k[3, :]
+
+    scale = len(head0_q_n) ** .5
+
+    print(f"head0 qn*kn = {(head0_q_n * head0_k_n).sum() / scale}")
+    print(f"head0 qn*kz = {(head0_q_n * head0_k_z).sum() / scale}")
+    print(f"head0 qz*kn = {(head0_q_z * head0_k_n).sum() / scale}")
+    print(f"head0 qz*kz = {(head0_q_z * head0_k_z).sum() / scale}")
 
     # scale = head1.proj_size ** 0.5
     # att_logit = torch.einsum("...qn,...kn->...qk", head1.wq(stream0), head1.wk(stream1)) / scale
@@ -152,8 +175,8 @@ def main():
     # plt.plot(att_logit[13, :])
     # plt.show()
 
-    plot_matrix(Wu @ Wo0 @ head0.wv(stream0).T, "act token head 0 V", "token", "seq")
-    plot_matrix(Wu @ Wo1 @ head1.wv(stream0).T, "act token head 1 V", "token", "seq")
+    plot_matrix(Wu @ Wo0 @ head0_v.T, "act token head 0 V", "token", "seq")
+    plot_matrix(Wu @ Wo1 @ head1_v.T, "act token head 1 V", "token", "seq")
 
     # plot circuits
     Wov0 = Wo0 @ Wv0
