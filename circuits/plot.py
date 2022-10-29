@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import torch.jit
 import torch.nn.functional as nnf
 
-from circuits_train import Transformer, Head, causal_mask
+from circuits.train import Transformer, Head, TokenTransformer, causal_mask
 
 
 def plot_matrix(value, name: str, y: Optional[str], x: Optional[str], min_max=None):
@@ -23,17 +23,17 @@ def plot_matrix(value, name: str, y: Optional[str], x: Optional[str], min_max=No
     plt.title(name)
     plt.tight_layout()
 
-    os.makedirs("ignored/circuits/plots", exist_ok=True)
-    plt.savefig(f"ignored/circuits/plots/{name}.png", bbox_inches='tight')
+    os.makedirs("../ignored/circuits/plots", exist_ok=True)
+    plt.savefig(f"../ignored/circuits/plots/{name}.png", bbox_inches='tight')
     plt.close()
 
 
 @torch.no_grad()
 def main():
     # import classes and load model
-    _ = Transformer(8, 0, 8, 8, 0, None)
+    _ = TokenTransformer(Transformer(0, 0, 8, 8), 8, 1, None)
     _ = Head(8, 8)
-    model: Transformer = torch.load("ignored/circuits/repeating_new/models/model_6000.pt")
+    model: TokenTransformer = torch.load("../ignored/circuits/lookup_new/models/model_5000.pt")
     model.to("cpu")
     model.eval()
 
@@ -46,7 +46,7 @@ def main():
     # TODO try forcing sharp attention patterns and see if they still work
     #   (easily achievable by adding things to the masks)
 
-    data_int = torch.tensor([5, 2, 0, 7, 8, 6, 4, 9, 0, 7, 3, 4])
+    data_int = torch.tensor([5, 5, 3, 0, 7, 8, 6, 4, 1, 7, 3, 2, 9, 0, 7, 3, 4])
     seq_len = len(data_int) - 1
 
     assert len(data_int) == seq_len + 1
@@ -58,18 +58,25 @@ def main():
     mask0 = mask.clone()
     mask1 = mask.clone()
 
-    # mask0[2:, 0:2] = -torch.inf
-    # mask0[2:6, 3:6] = -torch.inf
-    # mask0[:, 7:10] = -torch.inf
-    # mask0[:, 11:] = -torch.inf
+    force_masks = False
+    if force_masks:
+        # first head 1e-2 triangle is no longer important with strict K-only composition?
+        mask0[4:, :3] = -torch.inf
+        mask0[4:13, 4:13] = -torch.inf
+        mask0[3, 3] = -torch.inf
 
-    head0 = model.layers[0][0]
-    head1 = model.layers[1][0]
+        # second head attention can be cut down a lot
+        mask1[13, 5:13] = -torch.inf
+        mask1[4:13, 4:13] = -torch.inf
+        mask1[4:, :3] = -torch.inf
+
+    head0 = model.transformer.layers[0][0]
+    head1 = model.transformer.layers[1][0]
 
     stream0 = model.embed(input)
-    delta0, att0 = head0(stream0, mask0)
+    delta0, att0 = head0(stream0, mask0, stream0)
     stream1 = stream0 + delta0
-    delta1, att1 = head1(stream1, mask1)
+    delta1, att1 = head1(stream1, mask1, stream0)
     stream2 = stream1 + delta1
     logits = model.un_embed(stream2)
 
@@ -105,15 +112,23 @@ def main():
 
     # activations
     plot_matrix(nnf.softmax(logits, dim=1), "act softmax", "seq", "digit")
-    plot_matrix(att0, "act att head0", "q", "k")
-    plot_matrix(att1, "act att head1", "q", "k")
-    plot_matrix(att1 @ att0, "act att virtual", "q", "k")
 
-    plot_matrix(Wu @ stream0.T, "act token stream 0", "seq", "token")
-    plot_matrix(Wu @ stream1.T, "act token stream 1", "seq", "token")
-    plot_matrix(Wu @ stream2.T, "act token stream 2", "seq", "token")
-    plot_matrix(Wu @ delta0.T, "act delta 0", "seq", "token")
-    plot_matrix(Wu @ delta1.T, "act delta 1", "seq", "token")
+    plot_matrix(att0, "act att unit head0", "q", "k")
+    plot_matrix(att1, "act att unit head1", "q", "k")
+    plot_matrix(att1 @ att0, "act att unit virtual", "q", "k")
+
+    def clip_log10(x):
+        return torch.clip(torch.log10(x), -10, None)
+
+    plot_matrix(clip_log10(att0), "act att log head0", "q", "k")
+    plot_matrix(clip_log10(att1), "act att log head1", "q", "k")
+    plot_matrix(clip_log10(att1 @ att0), "act att log virtual", "q", "k")
+
+    plot_matrix(Wu @ stream0.T, "act token stream 0", "token", "seq")
+    plot_matrix(Wu @ stream1.T, "act token stream 1", "token", "seq")
+    plot_matrix(Wu @ stream2.T, "act token stream 2", "token", "seq")
+    plot_matrix(Wu @ delta0.T, "act token delta 0", "token", "seq")
+    plot_matrix(Wu @ delta1.T, "act token delta 1", "token", "seq")
 
     s_mats = [stream0, stream1, stream2, delta0, delta1]
     s_min_max = min(x.min() for x in s_mats), max(x.max() for x in s_mats)
@@ -123,16 +138,22 @@ def main():
     plot_matrix(delta0, "act raw delta 0", "seq", "n", s_min_max)
     plot_matrix(delta1, "act raw delta 1", "seq", "n", s_min_max)
 
-    plot_matrix(head0.wq(stream0), "act head 0 Q", None, None)
-    plot_matrix(head0.wk(stream0), "act head 0 K", None, None)
-    plot_matrix(head0.wv(stream0), "act head 0 V", None, None)
+    plot_matrix(head0.wq(stream0), "act raw head 0 0.Q", "seq", None)
+    plot_matrix(head0.wk(stream0), "act raw head 0 1.K", "seq", None)
+    plot_matrix(head0.wv(stream0), "act raw head 0 2.V", "seq", None)
 
-    plot_matrix(head1.wq(stream1), "act head 1 Q", None, None)
-    plot_matrix(head1.wk(stream1), "act head 1 K", None, None)
-    plot_matrix(head1.wv(stream1), "act head 1 V", None, None)
+    plot_matrix(head1.wq(stream0), "act raw head 1 0.Q", "seq", None)
+    plot_matrix(head1.wk(stream1), "act raw head 1 1.K", "seq", None)
+    plot_matrix(head1.wv(stream0), "act raw head 1 2.V", "seq", None)
 
-    plot_matrix(Wu @ Wo0 @ head0.wv(stream0).T, "act token head 0 V", None, None)
-    plot_matrix(Wu @ Wo1 @ head1.wv(stream1).T, "act token head 1 V", None, None)
+    # scale = head1.proj_size ** 0.5
+    # att_logit = torch.einsum("...qn,...kn->...qk", head1.wq(stream0), head1.wk(stream1)) / scale
+    # att_logit = att_logit + mask1
+    # plt.plot(att_logit[13, :])
+    # plt.show()
+
+    plot_matrix(Wu @ Wo0 @ head0.wv(stream0).T, "act token head 0 V", "token", "seq")
+    plot_matrix(Wu @ Wo1 @ head1.wv(stream0).T, "act token head 1 V", "token", "seq")
 
     # plot circuits
     Wov0 = Wo0 @ Wv0
@@ -145,22 +166,22 @@ def main():
     plot_matrix(We.T @ Wqk1 @ We, "circuit qk 1", "dest token", "src token")
     plot_matrix(Wu @ Wov0 @ We, "circuit ov 0", "dest token", "src token")
     plot_matrix(Wu @ Wov1 @ We, "circuit ov 1", "dest token", "src token")
-    plot_matrix(Wu @ Wov1 @ Wov0 @ We, "circuit ov virtual", "dest token", "src token")
+    # plot_matrix(Wu @ Wov1 @ Wov0 @ We, "circuit ov virtual", "dest token", "src token")
 
-    plot_matrix(We.T @ Wov0 @ Wqk1 @ We, "circuit comp Q", None, None)
+    # plot_matrix(We.T @ Wov0 @ Wqk1 @ We, "circuit comp Q", None, None)
     plot_matrix(We.T @ Wqk1 @ Wov0 @ We, "circuit comp K", None, None)
-    plot_matrix(We.T @ Wov1 @ Wqk1 @ Wov0 @ We, "circuit comp QK", None, None)
+    # plot_matrix(We.T @ Wov1 @ Wqk1 @ Wov0 @ We, "circuit comp QK", None, None)
 
-    q_norm = torch.linalg.matrix_norm(Wqk1.T @ Wov0) / \
-             (torch.linalg.matrix_norm(Wqk1.T) * torch.linalg.matrix_norm(Wov0))
+    # q_norm = torch.linalg.matrix_norm(Wqk1.T @ Wov0) / \
+    #          (torch.linalg.matrix_norm(Wqk1.T) * torch.linalg.matrix_norm(Wov0))
     k_norm = torch.linalg.matrix_norm(Wqk1 @ Wov0) / \
              (torch.linalg.matrix_norm(Wqk1) * torch.linalg.matrix_norm(Wov0))
-    v_norm = torch.linalg.matrix_norm(Wov1 @ Wov0) / \
-             (torch.linalg.matrix_norm(Wov1) * torch.linalg.matrix_norm(Wov0))
+    # v_norm = torch.linalg.matrix_norm(Wov1 @ Wov0) / \
+    #          (torch.linalg.matrix_norm(Wov1) * torch.linalg.matrix_norm(Wov0))
 
-    print("Q comp", q_norm)
+    # print("Q comp", q_norm)
     print("K comp", k_norm)
-    print("V comp", v_norm)
+    # print("V comp", v_norm)
 
 
 if __name__ == '__main__':

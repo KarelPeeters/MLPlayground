@@ -30,14 +30,14 @@ class Head(nn.Module):
         self.wv = nn.Linear(stream_size, proj_size, bias=False)
         self.wo = nn.Linear(proj_size, stream_size, bias=False)
 
-    def forward(self, stream, att_mask):
+    def forward(self, stream, att_mask, prev_stream):
         # stream: BxSxN
         # * we use ... instead of B to allow arbitrarily many batch dims, including none
         # * in einsum we use q/k for the respective dims corresponding to S
 
-        q = self.wq(stream)
+        q = self.wq(prev_stream)
         k = self.wk(stream)
-        v = self.wv(stream)
+        v = self.wv(prev_stream)
 
         scale = self.proj_size ** 0.5
         att_logit = torch.einsum("...qn,...kn->...qk", q, k) / scale
@@ -72,6 +72,7 @@ class Transformer(nn.Module):
     def forward(self, stream, att_mask):
         atts = []
         streams = [stream]
+        prev_stream = stream
 
         for layer in self.layers:
             layer: nn.ModuleList
@@ -80,10 +81,11 @@ class Transformer(nn.Module):
             layer_atts = []
 
             for head in layer:
-                head_delta, head_att = head(stream, att_mask)
+                head_delta, head_att = head(stream, att_mask, prev_stream)
                 layer_delta = layer_delta + head_delta
                 layer_atts.append(head_att)
 
+            prev_stream = stream
             stream = stream + layer_delta
             streams.append(stream)
             atts.append(layer_atts)
@@ -293,6 +295,11 @@ def main(plotter: LogPlotter):
         logger.log("acc", "predictable", acc_predictable)
         logger.log("acc", "1", 1)
 
+        token_output_freq = (sample.output_tokens.unsqueeze(-1) == torch.arange(tokens, device=device)) \
+            .view(-1, tokens).float().mean(dim=0)
+        for t in range(tokens):
+            logger.log("freq", f"token {t}", token_output_freq[t])
+
         stream_weight = sum((s * s).mean() for s in streams)
         logger.log("norm", "stream_weight", stream_weight)
 
@@ -301,6 +308,9 @@ def main(plotter: LogPlotter):
         total_loss += predictable_focus * loss_predictable
         total_loss += l2_stream * stream_weight
         total_loss += l1_weight * sum(param.abs().mean() for param in model.parameters())
+
+        # TODO remove this
+        # total_loss += 0.01 * (q_norm + v_norm)
 
         optim.zero_grad()
         total_loss.backward()
