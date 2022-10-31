@@ -185,12 +185,13 @@ def plots(model: TokenTransformer, atts: List[List[torch.tensor]], plot_weights:
 
 
 def main(plotter: LogPlotter):
-    run_name = "lookup_new"
+    run_name = "lookup_after_new_sampling"
     run_path = f"../ignored/circuits/{run_name}/"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     save_freq = 100
     plot_freq = 100
     plot_weights = True
+    print_wrong_freq = 0
 
     if os.path.exists(run_path):
         shutil.rmtree(run_path)
@@ -217,17 +218,19 @@ def main(plotter: LogPlotter):
     model = TokenTransformer(Transformer(depth, heads, stream_size, proj_size), tokens, output_token_count, None)
     model.to(device)
 
-    l2_weight = 0.1
+    l2_weight = 0.5
     l2_stream = 0.0
     l1_weight = 0.0
-    predictable_focus = 1
+    predictable_focus = 8
 
-    optim = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=l2_weight)
+    optim = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=l2_weight)
 
     logger = Logger()
     os.makedirs(run_path, exist_ok=False)
 
     for bi in itertools.count():
+        plotter.block_while_paused()
+
         print(f"Starting batch {bi}")
         logger.start_batch()
 
@@ -282,6 +285,16 @@ def main(plotter: LogPlotter):
         acc_uniform = 1 / tokens
 
         acc_all_max = (predictable_count + (token_count - predictable_count) / tokens) / token_count
+
+        if print_wrong_freq != 0 and bi % print_wrong_freq == 0:
+            torch.set_printoptions(linewidth=1000)
+            wrong_indices = torch.argwhere(acc_individual * sample.predictable == True)
+            if len(wrong_indices) > 0:
+                wrong_bi = wrong_indices[0, 0]
+                print("Wrong sequence:", sample.input_tokens[wrong_bi])
+                print(f"Input {sample.input_tokens[wrong_bi]}")
+                print(f"Expected {sample.output_tokens[wrong_bi].T}")
+                print(f"Got {torch.argmax(model_output, -1)[bi].T}")
 
         logger.log("loss", "train", loss_all)
         logger.log("loss", "uniform", loss_uniform)

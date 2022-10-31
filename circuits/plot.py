@@ -33,7 +33,7 @@ def main():
     # import classes and load model
     _ = TokenTransformer(Transformer(0, 0, 8, 8), 8, 1, None)
     _ = Head(8, 8)
-    model: TokenTransformer = torch.load("../ignored/circuits/lookup_new/models/model_5000.pt")
+    model: TokenTransformer = torch.load("../ignored/circuits/lookup_after_new_sampling/models/model_17000.pt")
     model.to("cpu")
     model.eval()
 
@@ -46,7 +46,8 @@ def main():
     # TODO try forcing sharp attention patterns and see if they still work
     #   (easily achievable by adding things to the masks)
 
-    data_int = torch.tensor([5, 5, 3, 0, 7, 8, 6, 4, 1, 7, 3, 2, 9, 0, 7, 3, 4])
+    data_int = torch.tensor([5, 5, 3, 0, 3, 8, 6, 4, 1, 7, 3, 2, 9, 0, 3, 3, 4])
+    # data_int = torch.tensor([8, 1, 3, 0, 7, 5, 8, 6, 7, 2, 9, 7, 9, 0, 7, 6, 8, 3, 7, 9, 4, 2, 1, 2, 7, 7, 3, 9, 5, 3, 4, 4])
     seq_len = len(data_int) - 1
 
     assert len(data_int) == seq_len + 1
@@ -181,6 +182,9 @@ def main():
     print("Head 1 Q13 matches:")
     logits_part = head1_q[13, :] * head1_k[:, :]
     plt.plot(logits_part[4:13, :])
+    plt.show()
+    logits = logits_part.sum(1)
+    plt.plot(logits)
     plt.show()
 
     # logit = (head1_q[13, :] * head1_k[i, :]).sum() / scale

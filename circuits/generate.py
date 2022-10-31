@@ -42,6 +42,23 @@ def ceil_div(x, y):
     return -(x // -y)
 
 
+def rand_delta_ints(min: int, max: int, delta: int, batch_size: int, count: int):
+    # this approximates rejection sampling pretty well when (max-min) is large enough
+    #   the only difference is that equal pre-delta values are overrepresented
+
+    total_delta = delta * (count - 1)
+
+    assert max > min
+    assert delta >= 0
+    assert total_delta < max - min
+
+    x_raw = torch.randint(max - min - total_delta, (batch_size, count))
+    x_sorted = torch.sort(x_raw, -1).values
+    x_delta = x_sorted + torch.arange(count) * delta + min
+
+    return x_delta
+
+
 def generate_sample_counting(batch_size: int, seq_len: int, tokens: int):
     assert tokens > seq_len
     starts = torch.randint(tokens - seq_len, (batch_size,))
@@ -74,8 +91,10 @@ def generate_sample_repeating(batch_size: int, seq_len: int, tokens: int, period
 def generate_sample_lookup(batch_size: int, seq_len: int, tokens: int):
     all_tokens = torch.randint(1, tokens, (batch_size, seq_len + 1))
 
-    second = torch.randint(3, seq_len + 1, (batch_size,))
-    first = (torch.rand(batch_size) * (second - 2) + 1).long()
+    zero_indices = rand_delta_ints(1, seq_len + 1, 2, batch_size, 2)
+
+    second = zero_indices[:, 1]
+    first = zero_indices[:, 0]
 
     assert torch.all(second - first > 1)
 
