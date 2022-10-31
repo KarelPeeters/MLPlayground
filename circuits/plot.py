@@ -59,20 +59,29 @@ def main():
     mask1 = mask.clone()
 
     # head0 Q=0 does not seem to matter much
-    # mask0[3, 1:] = -torch.inf
-    # mask0[13, 1:] = -torch.inf
 
-    force_masks = False
-    if force_masks:
-        # first head 1e-2 triangle is no longer important with strict K-only composition?
+    # TODO be careful, modifying both heads at once can hide issues!
+    force_mask_0 = False
+    force_mask_1 = False
+
+    if force_mask_0:
+        pass
+        # GOOD: queries for zero tokens don't matter, can be set to first token
+        mask0[3, 1:] = -torch.inf
+        mask0[13, 1:] = -torch.inf
+
+        # MEH: removing most of the triangle, except second line (probably any extra key would be fine)
+        # mask0[4:13, 4:] = -torch.inf # BROKEN by itself, we need something
+        # mask0[5:13, 5] = 0  # MEH: mostly fixes the triangle, but second head loses a bit of focus
+
+        # GOOD: keys for tokens before first zero don't matter
         mask0[4:, :3] = -torch.inf
-        mask0[4:13, 4:13] = -torch.inf
-        mask0[3, 3] = -torch.inf
+        mask0[13, 0] = 0
 
-        # second head attention can be cut down a lot
-        mask1[13, 5:13] = -torch.inf
-        mask1[4:13, 4:13] = -torch.inf
+    if force_mask_1:
+        mask1[4:13, 4:] = -torch.inf
         mask1[4:, :3] = -torch.inf
+        mask1[13, 5:] = -torch.inf
 
     head0 = model.transformer.layers[0][0]
     head1 = model.transformer.layers[1][0]
@@ -149,13 +158,13 @@ def main():
     head1_k = head1.wk(stream1)
     head1_v = head1.wv(stream0)  # no V-comp
 
-    plot_matrix(head0_q, "act raw head 0 0.Q", "seq", None)
-    plot_matrix(head0_k, "act raw head 0 1.K", "seq", None)
-    plot_matrix(head0_v, "act raw head 0 2.V", "seq", None)
+    plot_matrix(head0_q, "act head 0 0.Q", "seq", None)
+    plot_matrix(head0_k, "act head 0 1.K", "seq", None)
+    plot_matrix(head0_v, "act head 0 2.V", "seq", None)
 
-    plot_matrix(head1_q, "act raw head 1 0.Q", "seq", None)
-    plot_matrix(head1_k, "act raw head 1 1.K", "seq", None)
-    plot_matrix(head1_v, "act raw head 1 2.V", "seq", None)
+    plot_matrix(head1_q, "act head 1 0.Q", "seq", None)
+    plot_matrix(head1_k, "act head 1 1.K", "seq", None)
+    plot_matrix(head1_v, "act head 1 2.V", "seq", None)
 
     head0_q_n = head0_q[0, :]
     head0_q_z = head0_q[3, :]
@@ -168,6 +177,14 @@ def main():
     print(f"head0 qn*kz = {(head0_q_n * head0_k_z).sum() / scale}")
     print(f"head0 qz*kn = {(head0_q_z * head0_k_n).sum() / scale}")
     print(f"head0 qz*kz = {(head0_q_z * head0_k_z).sum() / scale}")
+
+    print("Head 1 Q13 matches:")
+    logits_part = head1_q[13, :] * head1_k[:, :]
+    plt.plot(logits_part[4:13, :])
+    plt.show()
+
+    # logit = (head1_q[13, :] * head1_k[i, :]).sum() / scale
+    # print(f"Logit q13 x k{i}: {logit.item()}")
 
     # scale = head1.proj_size ** 0.5
     # att_logit = torch.einsum("...qn,...kn->...qk", head1.wq(stream0), head1.wk(stream1)) / scale
