@@ -91,7 +91,7 @@ def main():
 
     stream_n1 = model.embed(input)
     if model.pos_encoding is not None:
-        stream0 = stream_n1 + model.pos_encoding
+        stream0 = stream_n1 + model.pos_encoding[:seq_len, :]
     else:
         stream0 = stream_n1
     delta0, att0 = head0(stream0, mask0, stream0)
