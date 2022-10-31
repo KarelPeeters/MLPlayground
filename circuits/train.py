@@ -1,6 +1,7 @@
 import itertools
 import os
 import shutil
+from dataclasses import dataclass
 from typing import Optional, List
 
 import einops
@@ -20,8 +21,15 @@ def causal_mask(seq_len: int):
     return torch.triu(full, diagonal=1)
 
 
+@dataclass
+class Composition:
+    q: bool
+    k: bool
+    v: bool
+
+
 class Head(nn.Module):
-    def __init__(self, stream_size: int, proj_size: int):
+    def __init__(self, stream_size: int, proj_size: int, comp: Composition):
         super().__init__()
         self.proj_size = proj_size
 
@@ -30,14 +38,16 @@ class Head(nn.Module):
         self.wv = nn.Linear(stream_size, proj_size, bias=False)
         self.wo = nn.Linear(proj_size, stream_size, bias=False)
 
+        self.comp = comp
+
     def forward(self, stream, att_mask, prev_stream):
         # stream: BxSxN
         # * we use ... instead of B to allow arbitrarily many batch dims, including none
         # * in einsum we use q/k for the respective dims corresponding to S
 
-        q = self.wq(prev_stream)
-        k = self.wk(stream)
-        v = self.wv(prev_stream)
+        q = self.wq(stream if self.comp.q else prev_stream)
+        k = self.wk(stream if self.comp.k else prev_stream)
+        v = self.wv(stream if self.comp.v else prev_stream)
 
         scale = self.proj_size ** 0.5
         att_logit = torch.einsum("...qn,...kn->...qk", q, k) / scale
@@ -57,13 +67,14 @@ class Transformer(nn.Module):
             self,
             depth: int, heads: int,
             stream_size: int, proj_size: int,
+            comp: Composition,
     ):
         super().__init__()
         self.stream_size = stream_size
 
         self.layers = nn.ModuleList(
             nn.ModuleList(
-                Head(stream_size, proj_size)
+                Head(stream_size, proj_size, comp)
                 for _ in range(heads)
             )
             for _ in range(depth)
@@ -215,7 +226,8 @@ def main(plotter: LogPlotter):
 
     mask = causal_mask(seq_len).to(device)
 
-    model = TokenTransformer(Transformer(depth, heads, stream_size, proj_size), tokens, output_token_count, None)
+    comp = Composition(q=False, k=True, v=False)
+    model = TokenTransformer(Transformer(depth, heads, stream_size, proj_size, comp), tokens, output_token_count, None)
     model.to(device)
 
     l2_weight = 0.5
@@ -288,7 +300,7 @@ def main(plotter: LogPlotter):
 
         if print_wrong_freq != 0 and bi % print_wrong_freq == 0:
             torch.set_printoptions(linewidth=1000)
-            wrong_indices = torch.argwhere(acc_individual * sample.predictable == True)
+            wrong_indices = torch.argwhere(acc_individual * sample.predictable)
             if len(wrong_indices) > 0:
                 wrong_bi = wrong_indices[0, 0]
                 print("Wrong sequence:", sample.input_tokens[wrong_bi])
