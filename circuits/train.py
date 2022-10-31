@@ -131,6 +131,10 @@ class TokenTransformer(nn.Module):
     def forward(self, tokens, att_mask):
         # tokens: ...xSxT one-hot encoded
         embedded = self.embed(tokens)
+
+        if self.pos_encoding is not None:
+            embedded += self.pos_encoding
+
         result, attn, streams = self.transformer(embedded, att_mask)
 
         result_split = einops.rearrange(result, "... s (c n) -> ... s c n", c=self.output_token_count)
