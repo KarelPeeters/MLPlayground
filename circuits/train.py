@@ -133,7 +133,8 @@ class TokenTransformer(nn.Module):
         embedded = self.embed(tokens)
 
         if self.pos_encoding is not None:
-            embedded += self.pos_encoding
+            seq_len = tokens.shape[-2]
+            embedded += self.pos_encoding[:seq_len, :]
 
         result, attn, streams = self.transformer(embedded, att_mask)
 
