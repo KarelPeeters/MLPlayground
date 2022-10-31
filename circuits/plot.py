@@ -5,7 +5,8 @@ import matplotlib.pyplot as plt
 import torch.jit
 import torch.nn.functional as nnf
 
-from circuits.train import Transformer, Head, TokenTransformer, causal_mask
+from circuits import generate
+from circuits.train import Transformer, Head, TokenTransformer, causal_mask, Composition
 
 
 def plot_matrix(value, name: str, y: Optional[str], x: Optional[str], min_max=None):
@@ -31,9 +32,10 @@ def plot_matrix(value, name: str, y: Optional[str], x: Optional[str], min_max=No
 @torch.no_grad()
 def main():
     # import classes and load model
-    _ = TokenTransformer(Transformer(0, 0, 8, 8), 8, 1, None)
-    _ = Head(8, 8)
-    model: TokenTransformer = torch.load("../ignored/circuits/lookup_after_new_sampling/models/model_17000.pt")
+    comp = Composition(True, True, True)
+    _ = TokenTransformer(Transformer(0, 0, 8, 8, comp), 8, 1, None)
+    _ = Head(8, 8, comp)
+    model: TokenTransformer = torch.load("../ignored/circuits/lookup_all/models/model_24900.pt")
     model.to("cpu")
     model.eval()
 
@@ -46,20 +48,20 @@ def main():
     # TODO try forcing sharp attention patterns and see if they still work
     #   (easily achievable by adding things to the masks)
 
-    data_int = torch.tensor([5, 5, 3, 0, 3, 8, 6, 4, 1, 7, 3, 2, 9, 0, 3, 3, 4])
-    # data_int = torch.tensor([8, 1, 3, 0, 7, 5, 8, 6, 7, 2, 9, 7, 9, 0, 7, 6, 8, 3, 7, 9, 4, 2, 1, 2, 7, 7, 3, 9, 5, 3, 4, 4])
-    seq_len = len(data_int) - 1
+    torch.random.manual_seed(1234)
+    sample = generate.generate_sample_lookup_all(1, 32, 10)
 
-    assert len(data_int) == seq_len + 1
-    assert torch.all(data_int < tokens)
+    seq_len = sample.seq_len
+    assert sample.batch_size == 1
+    input_tokens = sample.input_tokens.squeeze(0)
+    output_tokens = sample.output_tokens.squeeze(0)
+    predictable = sample.predictable.squeeze(0)
 
     mask = causal_mask(seq_len)
-    input = nnf.one_hot(data_int[:-1], tokens).float()
+    input = nnf.one_hot(input_tokens, tokens).float()
 
     mask0 = mask.clone()
     mask1 = mask.clone()
-
-    # head0 Q=0 does not seem to matter much
 
     # TODO be careful, modifying both heads at once can hide issues!
     force_mask_0 = False
@@ -84,26 +86,27 @@ def main():
         mask1[4:, :3] = -torch.inf
         mask1[13, 5:] = -torch.inf
 
-    head0 = model.transformer.layers[0][0]
-    head1 = model.transformer.layers[1][0]
+    head0: Head = model.transformer.layers[0][0]
+    head1: Head = model.transformer.layers[1][0]
 
-    stream0 = model.embed(input)
+    stream_n1 = model.embed(input)
+    if model.pos_encoding is not None:
+        stream0 = stream_n1 + model.pos_encoding
+    else:
+        stream0 = stream_n1
     delta0, att0 = head0(stream0, mask0, stream0)
     stream1 = stream0 + delta0
     delta1, att1 = head1(stream1, mask1, stream0)
     stream2 = stream1 + delta1
     logits = model.un_embed(stream2)
 
-    print(f"sequence: {data_int}")
-    for i, token in enumerate(data_int.tolist()):
-        if i > 0:
-            topk = logits[i - 1].softmax(0).topk(3)
-            token_pred = {t.item(): p.item() for t, p in zip(topk.indices, topk.values)}
-        else:
-            token_pred = {}
-
+    print(f"Sequence: {sample.input_tokens}")
+    for i, (token_in, token_out, token_predictable) in enumerate(
+            zip(input_tokens.tolist(), output_tokens.tolist(), predictable.tolist())):
+        topk = logits[i].softmax(0).topk(3)
+        token_pred = {t.item(): p.item() for t, p in zip(topk.indices, topk.values)}
         token_pred_str = ", ".join(f"{t}: {v:.2f}" for t, v in token_pred.items())
-        print(f"    {i:>2}: {token} (pred {token_pred_str})")
+        print(f"    {i:>2}: {token_in} -> {token_out} {token_predictable} (pred {token_pred_str})")
 
     # plot weights
     # for name, param in model.named_parameters():
@@ -167,25 +170,23 @@ def main():
     plot_matrix(head1_k, "act head 1 1.K", "seq", None)
     plot_matrix(head1_v, "act head 1 2.V", "seq", None)
 
-    head0_q_n = head0_q[0, :]
-    head0_q_z = head0_q[3, :]
-    head0_k_n = head0_k[0, :]
-    head0_k_z = head0_k[3, :]
+    # head0_q_n = head0_q[0, :]
+    # head0_q_z = head0_q[3, :]
+    # head0_k_n = head0_k[0, :]
+    # head0_k_z = head0_k[3, :]
+    # scale = len(head0_q_n) ** .5
+    # print(f"head0 qn*kn = {(head0_q_n * head0_k_n).sum() / scale}")
+    # print(f"head0 qn*kz = {(head0_q_n * head0_k_z).sum() / scale}")
+    # print(f"head0 qz*kn = {(head0_q_z * head0_k_n).sum() / scale}")
+    # print(f"head0 qz*kz = {(head0_q_z * head0_k_z).sum() / scale}")
 
-    scale = len(head0_q_n) ** .5
-
-    print(f"head0 qn*kn = {(head0_q_n * head0_k_n).sum() / scale}")
-    print(f"head0 qn*kz = {(head0_q_n * head0_k_z).sum() / scale}")
-    print(f"head0 qz*kn = {(head0_q_z * head0_k_n).sum() / scale}")
-    print(f"head0 qz*kz = {(head0_q_z * head0_k_z).sum() / scale}")
-
-    print("Head 1 Q13 matches:")
-    logits_part = head1_q[13, :] * head1_k[:, :]
-    plt.plot(logits_part[4:13, :])
-    plt.show()
-    logits = logits_part.sum(1)
-    plt.plot(logits)
-    plt.show()
+    # print("Head 1 Q13 matches:")
+    # logits_part = head1_q[13, :] * head1_k[:, :]
+    # plt.plot(logits_part[4:13, :])
+    # plt.show()
+    # logits = logits_part.sum(1)
+    # plt.plot(logits)
+    # plt.show()
 
     # logit = (head1_q[13, :] * head1_k[i, :]).sum() / scale
     # print(f"Logit q13 x k{i}: {logit.item()}")
@@ -216,16 +217,18 @@ def main():
     plot_matrix(We.T @ Wqk1 @ Wov0 @ We, "circuit comp K", None, None)
     # plot_matrix(We.T @ Wov1 @ Wqk1 @ Wov0 @ We, "circuit comp QK", None, None)
 
-    # q_norm = torch.linalg.matrix_norm(Wqk1.T @ Wov0) / \
-    #          (torch.linalg.matrix_norm(Wqk1.T) * torch.linalg.matrix_norm(Wov0))
-    k_norm = torch.linalg.matrix_norm(Wqk1 @ Wov0) / \
-             (torch.linalg.matrix_norm(Wqk1) * torch.linalg.matrix_norm(Wov0))
-    # v_norm = torch.linalg.matrix_norm(Wov1 @ Wov0) / \
-    #          (torch.linalg.matrix_norm(Wov1) * torch.linalg.matrix_norm(Wov0))
-
-    # print("Q comp", q_norm)
-    print("K comp", k_norm)
-    # print("V comp", v_norm)
+    if head1.comp.q:
+        q_norm = torch.linalg.matrix_norm(Wqk1.T @ Wov0) / \
+                 (torch.linalg.matrix_norm(Wqk1.T) * torch.linalg.matrix_norm(Wov0))
+        print("Q comp", q_norm)
+    if head1.comp.k:
+        k_norm = torch.linalg.matrix_norm(Wqk1 @ Wov0) / \
+                 (torch.linalg.matrix_norm(Wqk1) * torch.linalg.matrix_norm(Wov0))
+        print("K comp", k_norm)
+    if head1.comp.v:
+        v_norm = torch.linalg.matrix_norm(Wov1 @ Wov0) / \
+                 (torch.linalg.matrix_norm(Wov1) * torch.linalg.matrix_norm(Wov0))
+        print("V comp", v_norm)
 
 
 if __name__ == '__main__':

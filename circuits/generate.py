@@ -88,7 +88,8 @@ def generate_sample_repeating(batch_size: int, seq_len: int, tokens: int, period
     )
 
 
-def generate_sample_lookup(batch_size: int, seq_len: int, tokens: int):
+def generate_sample_lookup(batch_size: int, seq_len: int, tokens: int, flip: bool = False):
+    assert tokens >= 2
     all_tokens = torch.randint(1, tokens, (batch_size, seq_len + 1))
 
     zero_indices = rand_delta_ints(1, seq_len + 1, 2, batch_size, 2)
@@ -98,14 +99,19 @@ def generate_sample_lookup(batch_size: int, seq_len: int, tokens: int):
 
     assert torch.all(second - first > 1)
 
-    bi = torch.arange(batch_size)
+    brange = torch.arange(batch_size)
 
-    all_tokens[bi, first] = all_tokens[bi, second]
-    all_tokens[bi, second - 1] = 0
-    all_tokens[bi, first - 1] = 0
+    all_tokens[brange, first] = all_tokens[brange, second]
+    all_tokens[brange, second - 1] = 0
+    all_tokens[brange, first - 1] = 0
 
     predictable = torch.zeros(batch_size, seq_len, 1, dtype=torch.bool)
-    predictable[bi, second - 1] = True
+    predictable[brange, second - 1] = True
+
+    if flip:
+        tmp = all_tokens[brange, first].clone()
+        all_tokens[brange, first] = all_tokens[brange, first - 1]
+        all_tokens[brange, first - 1] = tmp
 
     return Sample(
         batch_size, seq_len, 1,
@@ -117,7 +123,41 @@ def generate_sample_lookup(batch_size: int, seq_len: int, tokens: int):
     )
 
 
-def generate_multi_lookback(batch_size: int, seq_len: int, tokens: int, deltas: List[int]):
+def generate_sample_lookup_all(batch_size: int, seq_len: int, tokens: int):
+    """
+    For every token, predict the token that followed the last occurrence of it.
+    If this is the first time we've seen this token, predict 0.
+    """
+
+    brange = torch.arange(batch_size)
+
+    input_tokens = torch.randint(1, tokens, (batch_size, seq_len))
+
+    output_tokens = torch.zeros(batch_size, seq_len, dtype=torch.int64)
+    memory = torch.zeros(batch_size, tokens, dtype=torch.int64)
+
+    prev_input = torch.zeros(batch_size, dtype=torch.int64)
+
+    for i in range(seq_len):
+        curr_input = input_tokens[:, i]
+        # store to memory first, so we can immediately output the current input if applicable
+        memory[brange, prev_input] = curr_input
+
+        curr_output = memory[brange, curr_input]
+        output_tokens[brange, i] = curr_output
+
+        prev_input = curr_input
+
+    return Sample(
+        batch_size, seq_len, 1,
+        input_tokens,
+        output_tokens[:, :, None],
+        # everything is predictable
+        torch.tensor(True).expand(batch_size, seq_len, 1),
+    )
+
+
+def generate_sample_multi_lookback(batch_size: int, seq_len: int, tokens: int, deltas: List[int]):
     assert all(d >= 0 for d in deltas)
     max_delta = max(deltas)
 
@@ -143,3 +183,16 @@ def generate_multi_lookback(batch_size: int, seq_len: int, tokens: int, deltas: 
     )
 
     return sample
+
+
+def main():
+    torch.random.manual_seed(10)
+    sample = generate_sample_lookup_all(2, 16, 10)
+
+    print(sample.input_tokens)
+    print(sample.output_tokens.mT)
+    print(sample.predictable.mT)
+
+
+if __name__ == '__main__':
+    main()

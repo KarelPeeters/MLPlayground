@@ -201,7 +201,7 @@ def plots(model: TokenTransformer, atts: List[List[torch.tensor]], plot_weights:
 
 
 def main(plotter: LogPlotter):
-    run_name = "lookup_after_new_sampling"
+    run_name = "lookup_all"
     run_path = f"../ignored/circuits/{run_name}/"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     save_freq = 100
@@ -214,7 +214,7 @@ def main(plotter: LogPlotter):
 
     tokens = 10
     batch_size = 1024
-    seq_len = 32
+    seq_len = 64
 
     stream_size = 128
     proj_size = 32
@@ -224,23 +224,24 @@ def main(plotter: LogPlotter):
     def generator():
         # return generate.generate_sample_counting(batch_size, seq_len, tokens)
         # return generate.generate_sample_repeating(batch_size, seq_len, tokens, 3)
-        return generate.generate_sample_lookup(batch_size, seq_len, tokens)
-        # return generate.generate_multi_lookback(batch_size, seq_len, tokens, [1])
+        # return generate.generate_sample_lookup(batch_size, seq_len, tokens, flip=True)
+        return generate.generate_sample_lookup_all(batch_size, seq_len, tokens)
+        # return generate.generate_sample_multi_lookback(batch_size, seq_len, tokens, [1])
 
     output_token_count = 1
 
     mask = causal_mask(seq_len).to(device)
 
     comp = Composition(q=False, k=True, v=False)
-    model = TokenTransformer(Transformer(depth, heads, stream_size, proj_size, comp), tokens, output_token_count, None)
+    model = TokenTransformer(Transformer(depth, heads, stream_size, proj_size, comp), tokens, output_token_count, seq_len)
     model.to(device)
 
-    l2_weight = 0.5
+    l2_weight = 1
     l2_stream = 0.0
     l1_weight = 0.0
-    predictable_focus = 8
+    predictable_focus = 0
 
-    optim = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=l2_weight)
+    optim = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=l2_weight)
 
     logger = Logger()
     os.makedirs(run_path, exist_ok=False)
