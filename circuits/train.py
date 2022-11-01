@@ -214,12 +214,13 @@ def main(plotter: LogPlotter):
 
     tokens = 10
     batch_size = 1024
-    seq_len = 32
+    seq_len = 256
 
     stream_size = 128
     proj_size = 32
     heads = 1
     depth = 2
+    pos_encoding = True
 
     def generator():
         # return generate.generate_sample_counting(batch_size, seq_len, tokens)
@@ -235,16 +236,17 @@ def main(plotter: LogPlotter):
     comp = Composition(q=False, k=True, v=False)
     model = TokenTransformer(
         Transformer(depth, heads, stream_size, proj_size, comp),
-        tokens, output_token_count, seq_len
+        tokens, output_token_count, seq_len if pos_encoding else None,
     )
     model.to(device)
 
-    l2_weight = 0.1
+    l2_weight = 0.0
     l2_stream = 0.0
     l1_weight = 0.0
     predictable_focus = 0
 
     optim = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=l2_weight)
+    # optim = torch.optim.SGD(model.parameters(), lr=1e-3, weight_decay=l2_weight, momentum=0.0)
 
     logger = Logger()
     os.makedirs(run_path, exist_ok=False)

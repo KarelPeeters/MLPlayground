@@ -35,7 +35,7 @@ def main():
     comp = Composition(True, True, True)
     _ = TokenTransformer(Transformer(0, 0, 8, 8, comp), 8, 1, None)
     _ = Head(8, 8, comp)
-    model: TokenTransformer = torch.load("../ignored/circuits/lookup_all/models/model_10600.pt")
+    model: TokenTransformer = torch.load("../ignored/circuits/lookup_all/models/model_1400.pt")
     model.to("cpu")
     model.eval()
 
