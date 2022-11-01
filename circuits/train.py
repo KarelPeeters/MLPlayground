@@ -118,7 +118,7 @@ class TokenTransformer(nn.Module):
         self.output_token_count = output_token_count
 
         if pos_encoding_length is not None:
-            self.pos_encoding = nn.Parameter(torch.randn(pos_encoding_length, stream_size))
+            self.pos_encoding = nn.Parameter(torch.randn(pos_encoding_length, stream_size) / stream_size ** .5)
         else:
             self.pos_encoding = None
 
@@ -214,7 +214,7 @@ def main(plotter: LogPlotter):
 
     tokens = 10
     batch_size = 1024
-    seq_len = 64
+    seq_len = 32
 
     stream_size = 128
     proj_size = 32
@@ -233,15 +233,18 @@ def main(plotter: LogPlotter):
     mask = causal_mask(seq_len).to(device)
 
     comp = Composition(q=False, k=True, v=False)
-    model = TokenTransformer(Transformer(depth, heads, stream_size, proj_size, comp), tokens, output_token_count, seq_len)
+    model = TokenTransformer(
+        Transformer(depth, heads, stream_size, proj_size, comp),
+        tokens, output_token_count, seq_len
+    )
     model.to(device)
 
-    l2_weight = 1
+    l2_weight = 0.1
     l2_stream = 0.0
     l1_weight = 0.0
     predictable_focus = 0
 
-    optim = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=l2_weight)
+    optim = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=l2_weight)
 
     logger = Logger()
     os.makedirs(run_path, exist_ok=False)

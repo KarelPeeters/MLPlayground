@@ -35,7 +35,7 @@ def main():
     comp = Composition(True, True, True)
     _ = TokenTransformer(Transformer(0, 0, 8, 8, comp), 8, 1, None)
     _ = Head(8, 8, comp)
-    model: TokenTransformer = torch.load("../ignored/circuits/lookup_all/models/model_24900.pt")
+    model: TokenTransformer = torch.load("../ignored/circuits/lookup_all/models/model_10600.pt")
     model.to("cpu")
     model.eval()
 
@@ -126,6 +126,12 @@ def main():
     Wk1 = head1.wk.weight
     Wv1 = head1.wv.weight
     Wo1 = head1.wo.weight
+
+    if model.pos_encoding is not None:
+        plot_matrix(model.pos_encoding, "weight raw pos_encoding", "seq", "stream")
+        pos_encoding_fft = torch.fft.rfft(model.pos_encoding, dim=0).abs()
+        pos_encoding_fft[0, :] = torch.nan  # hide DC
+        plot_matrix(pos_encoding_fft, "weight raw pos_encoding fft", "freq", "stream")
 
     # activations
     plot_matrix(nnf.softmax(logits, dim=1), "act softmax", "seq", "digit")
