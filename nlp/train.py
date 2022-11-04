@@ -48,7 +48,7 @@ def main(plotter: LogPlotter):
     )
     model.to(device)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0.1)
     logger = Logger()
 
     for bi, batch_tokens_raw in enumerate(reader):
@@ -90,6 +90,12 @@ def main(plotter: LogPlotter):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
+        for name, param in model.named_parameters():
+            param_abs = param.abs()
+            grad_norm = (param.grad.abs() / param_abs).mean()
+            logger.log("log(grad/param)", name, torch.log10(grad_norm))
+            logger.log("log(param)", name, torch.log10(param_abs.mean()))
 
         plotter.update(logger)
 

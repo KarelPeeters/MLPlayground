@@ -97,6 +97,10 @@ class TokenTransformerModel(nn.Module):
 
         self.transformer = transformer
 
+        with torch.no_grad():
+            self.un_embed.weight *= 0.001
+            self.un_embed.bias *= 0.0
+
     def forward(self, x, mask):
         # (seq, batch)
         seq_len, batch_size = x.shape
