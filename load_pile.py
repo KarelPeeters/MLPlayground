@@ -1,4 +1,5 @@
 import time
+from collections import Counter
 
 from lm_dataformat import Reader
 
@@ -11,7 +12,11 @@ docs_seen = 0
 prev_time = time.perf_counter()
 prev_chars_seen = 0
 
+counter = Counter()
+
 for doc in reader.stream_data():
+    counter.update(doc)
+
     if docs_seen % 10000 == 0:
         now = time.perf_counter()
         char_tp = (chars_seen - prev_chars_seen) / (now - prev_time)
@@ -20,6 +25,8 @@ for doc in reader.stream_data():
 
         prev_time = now
         prev_chars_seen = chars_seen
+
+        print(counter)
 
     chars_seen += len(doc)
     docs_seen += 1
