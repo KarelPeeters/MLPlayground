@@ -11,6 +11,11 @@ from lib.plotter import run_with_plotter, LogPlotter
 from nlp.model import TransformerModel, build_causal_mask, TokenTransformerModel
 
 
+def set_learning_rate(optimizer, lr):
+    for g in optimizer.param_groups:
+        g["lr"] = lr
+
+
 def main(plotter: LogPlotter):
     run_name = "first_nlp_run"
     run_path = os.path.join("ignored/nlp", run_name)
@@ -40,6 +45,9 @@ def main(plotter: LogPlotter):
     size_ff = 1024
     heads = 8
 
+    learning_rate = 1e-4
+    learning_rate_warmup = 100
+
     causal_mask = build_causal_mask(seq_len).to(device)
 
     model = TokenTransformerModel(
@@ -48,7 +56,7 @@ def main(plotter: LogPlotter):
     )
     model.to(device)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0.1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0, weight_decay=0.1)
     logger = Logger()
 
     for bi, batch_tokens_raw in enumerate(reader):
@@ -86,6 +94,14 @@ def main(plotter: LogPlotter):
 
         logger.log("loss", "loss", loss)
         logger.log("log(loss)", "log(loss)", torch.log10(loss))
+
+        if bi < learning_rate_warmup:
+            curr_learning_rate = learning_rate * bi / learning_rate_warmup
+        else:
+            curr_learning_rate = learning_rate
+
+        set_learning_rate(optimizer, curr_learning_rate)
+        logger.log("lr", "lr", curr_learning_rate)
 
         optimizer.zero_grad()
         loss.backward()
