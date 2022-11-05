@@ -66,6 +66,7 @@ def main(plotter: LogPlotter):
             logger.save(os.path.join(run_path, "log.npz"))
 
         plotter.block_while_paused()
+        print(f"Starting batch {bi}")
         logger.start_batch()
 
         batch_tokens_raw = torch.tensor(batch_tokens_raw, device=device).T
@@ -109,9 +110,12 @@ def main(plotter: LogPlotter):
 
         for name, param in model.named_parameters():
             param_abs = param.abs()
-            grad_norm = (param.grad.abs() / param_abs).mean()
-            logger.log("log(grad/param)", name, torch.log10(grad_norm))
-            logger.log("log(param)", name, torch.log10(param_abs.mean()))
+            param_abs_mean = torch.clamp(param_abs.mean(), 1e-6, 1e6)
+            grad_norm_mean = torch.clamp(param.grad.abs() / param_abs, 1e-6, 1e6).mean()
+            logger.log("log(param)", name, torch.log10(param_abs_mean))
+            logger.log("log(grad/param)", name, torch.log10(grad_norm_mean))
+
+            # print(f"param '{name}'", param_abs_mean.item(), grad_norm_mean.item())
 
         plotter.update(logger)
 
