@@ -33,7 +33,7 @@ class MultiHeadAttention(nn.Module):
         v = qkv[:, :, 2 * d_kq:]
 
         # attention
-        logits = torch.bmm(q.transpose(0, 1), k.transpose(0, 1).transpose(1, 2))
+        logits = torch.bmm(q.transpose(0, 1), k.transpose(0, 1).transpose(1, 2)) / d_kq ** .5
         if mask is not None:
             logits = logits + mask
         weights = nnf.softmax(logits, -1)
