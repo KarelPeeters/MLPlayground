@@ -17,7 +17,7 @@ def set_learning_rate(optimizer, lr):
 
 
 def main(plotter: LogPlotter):
-    run_name = "larger"
+    run_name = "larger_fourier"
     run_path = os.path.join("../ignored/nlp", run_name)
     os.makedirs(run_path, exist_ok=False)
 
@@ -52,7 +52,8 @@ def main(plotter: LogPlotter):
 
     model = TokenTransformerModel(
         TransformerModel(depth, size_stream, size_ff, heads),
-        len(tokens) + 1, seq_len, len(tokens)
+        tokens=len(tokens) + 1, max_seq_len=seq_len, padding_idx=len(tokens),
+        use_fourier_emb=True,
     )
     model.to(device)
 

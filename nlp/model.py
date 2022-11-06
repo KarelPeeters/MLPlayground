@@ -5,6 +5,25 @@ from torch import nn
 from torch.nn import functional as nnf
 
 
+def generate_fourier_embedding(seq_len: int, size_stream: int):
+    assert size_stream % 2 == 0, "Stream size must be even"
+
+    freq = torch.linspace(1, seq_len / 2, size_stream // 2)
+    index = torch.arange(seq_len)
+    t = freq[None, :] * index[:, None] * 2 * torch.pi / seq_len
+
+    # pure fourier embedding
+    pos = torch.stack([
+        torch.sin(t),
+        torch.cos(t),
+    ], dim=2).view(seq_len, size_stream)
+
+    # add some noise to break potential symmetries
+    pos += torch.randn(seq_len, size_stream) / size_stream ** .5
+
+    return pos
+
+
 class MultiHeadAttention(nn.Module):
     def __init__(self, size_stream: int, heads: int, size_kq: int, size_v: int):
         super().__init__()
@@ -83,7 +102,9 @@ class TokenTransformerModel(nn.Module):
     def __init__(
             self,
             transformer: TransformerModel,
-            tokens: int, max_seq_len: int, padding_idx: Optional[int],
+            tokens: int, max_seq_len: int,
+            padding_idx: Optional[int],
+            use_fourier_emb: bool,
     ):
         super().__init__()
 
@@ -92,7 +113,12 @@ class TokenTransformerModel(nn.Module):
         size_stream = transformer.size_stream
 
         self.embed = nn.Embedding(tokens, size_stream, padding_idx=padding_idx)
+
         self.pos_encoding = nn.Parameter(torch.randn(max_seq_len, size_stream) / size_stream ** .5)
+        if use_fourier_emb:
+            with torch.no_grad():
+                self.pos_encoding.copy_(generate_fourier_embedding(max_seq_len, size_stream))
+
         self.un_embed = nn.Linear(size_stream, tokens)
 
         self.transformer = transformer
