@@ -17,8 +17,8 @@ def set_learning_rate(optimizer, lr):
 
 
 def main(plotter: LogPlotter):
-    run_name = "first_nlp_run"
-    run_path = os.path.join("ignored/nlp", run_name)
+    run_name = "larger"
+    run_path = os.path.join("../ignored/nlp", run_name)
     os.makedirs(run_path, exist_ok=False)
 
     token_path = r"C:\Documents\Programming\Rust\kToken\ignored\tokens.json"
@@ -30,7 +30,7 @@ def main(plotter: LogPlotter):
 
     save_freq = 512
 
-    batch_size = 32
+    batch_size = 64
     seq_len = 128
 
     with open(token_path, "r") as f:
@@ -40,7 +40,7 @@ def main(plotter: LogPlotter):
     print(f"Tokens: {len(tokens)}")
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    depth = 4
+    depth = 8
     size_stream = 1024
     size_ff = 1024
     heads = 8

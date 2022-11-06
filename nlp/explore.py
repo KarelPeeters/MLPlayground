@@ -14,14 +14,15 @@ def token_to_str(raw_tokens, token):
 
 @torch.no_grad()
 def main():
-    model_path = "../ignored/nlp/first_nlp_run/models/model_24576.pt"
+    # model_path = "../ignored/nlp/first_nlp_run/models/model_30720.pt"
+    model_path = "../ignored/nlp/larger/models/model_16896.pt"
     token_path = r"C:\Documents\Programming\Rust\kToken\ignored\tokens.json"
 
     with open(token_path, "r") as f:
         raw_tokens = json.load(f)["tokens"]
         tokenizer = Tokenizer(raw_tokens)
 
-    tokens = tokenizer.tokenize("The United States of ")
+    tokens = tokenizer.tokenize("The largest country is ")
     print(tokens)
 
     print([token_to_str(raw_tokens, t) for t in list(tokens)])
