@@ -55,8 +55,8 @@ def main():
 
     print("Topk:")
     for i, value in itertools.chain(zip(top_k.indices, top_k.values), zip(bottom_k.indices, bottom_k.values)):
-        a_i = i // model_tokens
-        b_i = i % model_tokens
+        a_i = i.item() // model_tokens
+        b_i = i.item() % model_tokens
 
         a = token_to_str(raw_tokens, a_i) if a_i < len(raw_tokens) else None
         b = token_to_str(raw_tokens, b_i) if b_i < len(raw_tokens) else None
