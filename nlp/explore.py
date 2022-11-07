@@ -15,7 +15,7 @@ def token_to_str(raw_tokens, token):
 @torch.no_grad()
 def main():
     # model_path = "../ignored/nlp/first_nlp_run/models/model_30720.pt"
-    model_path = "../ignored/nlp/larger/models/model_16896.pt"
+    model_path = "../ignored/nlp/larger_fourier/models/model_10240.pt"
     token_path = r"C:\Documents\Programming\Rust\kToken\ignored\tokens.json"
 
     with open(token_path, "r") as f:
