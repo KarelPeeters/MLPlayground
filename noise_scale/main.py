@@ -1,13 +1,15 @@
+import time
+
+import torch.nn.functional as nnf
 import torch.optim
 import torchvision
+from matplotlib import pyplot as plt
 from torch.utils.data import DataLoader
 from torchvision.transforms import transforms
 
 from lib.logger import Logger
 from lib.plotter import run_with_plotter, LogPlotter
-from noise_scale.model import ResNet, ResNet9
-
-import torch.nn.functional as nnf
+from noise_scale.model import ResNet9
 
 DATA_ROOT = "../ignored/data"
 
@@ -34,40 +36,74 @@ def data_loader(batch_size: int, train: bool):
 
 
 def main(plotter: LogPlotter):
-    batch_size = 128
+    sample_budget = 128 * 1024
+
+    batch_sizes = [4, 8, 128, 256, 512]
     device = "cuda"
 
-    # model = ResNet(64, 8, 3, 4, 10, 32)
-    model = ResNet9(3, 10, 32)
-    model.to(device)
-
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    final_losses = []
+    final_accs = []
+    final_times = []
 
     logger = Logger()
 
-    for x, y in data_loader(batch_size, True):
-        plotter.block_while_paused()
-        logger.start_batch()
+    for batch_size in batch_sizes:
+        print(f"Running with batch size {batch_size}")
 
-        x = x.to(device)
-        y = y.to(device)
+        # model = ResNet(64, 8, 3, 4, 10, 32)
+        model = ResNet9(3, 10, 32)
+        model.to(device)
 
-        y_pred = model(x)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        start = time.perf_counter()
 
-        loss = nnf.cross_entropy(y_pred, y)
-        acc = (torch.argmax(y_pred, dim=-1) == y).float().mean()
+        for bi, (x, y) in enumerate(data_loader(batch_size, True)):
+            if bi * batch_size >= sample_budget:
+                break
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            print(f"  batch {bi} / {sample_budget // batch_size}")
 
-        logger.log("loss", "train", loss)
-        logger.log("acc", "train", acc)
+            plotter.block_while_paused()
+            logger.start_batch()
 
-        logger.log("acc", "uniform", 1/10)
-        logger.log("acc", "perfect", 1)
+            logger.log("batch", "batch size", batch_size)
 
-        plotter.update(logger)
+            x = x.to(device)
+            y = y.to(device)
+
+            y_pred = model(x)
+
+            loss = nnf.cross_entropy(y_pred, y)
+            acc = (torch.argmax(y_pred, dim=-1) == y).float().mean()
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            logger.log("loss", "train", loss)
+            logger.log("acc", "train", acc)
+
+            logger.log("acc", "uniform", 1 / 10)
+            logger.log("acc", "perfect", 1)
+
+            plotter.update(logger)
+
+        final_loss = logger.finished_data().values[("loss", "train")][-10:].mean()
+        final_acc = logger.finished_data().values[("acc", "train")][-10:].mean()
+
+        final_losses.append(final_loss)
+        final_accs.append(final_acc)
+        final_times.append(time.perf_counter() - start)
+
+    for name, data in [("loss", final_losses), ("acc", final_accs), ("time", final_times)]:
+        plt.plot(batch_sizes, data)
+        plt.xscale("log")
+        plt.title(name)
+        plt.xlabel("Batch size")
+        plt.ylabel(name)
+        plt.show()
+
+    logger.save("log.npz")
 
 
 if __name__ == '__main__':
